@@ -2693,6 +2693,27 @@ html.kh-gated body{overflow:hidden}
   body.nav-open #space *{animation-play-state:paused!important}
 }
 @media (max-width:860px) and (prefers-color-scheme:dark){:root:not([data-theme="light"]) .side{background:#080B12}}
+
+/* tablet sidebar: stop items vanishing while scrolling (Chrome Android tile dropping), touch screens wider than phones only */
+@media (min-width:861px) and (hover:none) and (pointer:coarse){
+  .side{height:calc(100dvh - 56px - env(safe-area-inset-top,0px));will-change:transform;transform:translateZ(0);
+    backface-visibility:hidden;-webkit-backface-visibility:hidden;contain:layout paint;
+    overscroll-behavior:contain;-webkit-overflow-scrolling:touch;background:var(--bg)}
+  :root[data-theme="dark"] .side{background:#080B12}
+  body.side-scrolling #space *{animation-play-state:paused!important}
+}
+@media (min-width:861px) and (hover:none) and (pointer:coarse) and (prefers-color-scheme:dark){:root:not([data-theme="light"]) .side{background:#080B12}}
+
+/* framing for uploaded pictures: zoomed pictures stay inside their boxes */
+.cm-gearimg,.gear-thumb,.wz-gimg,.ct-face{overflow:hidden}
+.hc-pic{flex:none;display:block;width:44px;height:52px;border-radius:8px;overflow:hidden}
+.hc-chip .hc-pic img{display:block;width:100%;height:100%;border-radius:0}
+.wz-pic{flex:none;display:block;width:84px;height:104px;border-radius:10px;border:2px solid var(--gold-line);overflow:hidden}
+.wz-hero .wz-pic img{display:block;width:100%;height:100%;border:0;border-radius:0}
+span.ct-face{display:block}
+#pfDlg{width:min(560px,94vw)}
+#pfDlg .fx-stage img{object-fit:cover}
+#pfDlg .dlg-actions{margin-top:16px}
 </style>
 </head>
 <body>
@@ -3706,7 +3727,7 @@ window.KH_HILTS = {
 <dialog id="kcZoom" aria-label="Card"></dialog>
 <dialog id="lightbox" aria-label="Artwork"><img alt=""><button class="btn lb-close" type="button" aria-label="Close">✕</button></dialog>
 
-    <footer class="site-foot"><span><b>Kyberheart</b> · Site v3.2</span><span class="foot-ver" title="Rules version">Rules v1.13</span><span>A non-commercial fan project for our table</span><button type="button" class="linkbtn foot-exp" id="khExport" hidden>Export uploads for the public site</button></footer>
+    <footer class="site-foot"><span><b>Kyberheart</b> · Site v3.4</span><span class="foot-ver" title="Rules version">Rules v1.13</span><span>A non-commercial fan project for our table</span><button type="button" class="linkbtn foot-exp" id="khExport" hidden>Export uploads for the public site</button></footer>
   </main>
   <aside class="toc" id="toc" aria-label="On this page"></aside>
 </div>
@@ -4341,7 +4362,16 @@ function gearDoc(name){
 const gearSrc = name => { const g = gearDoc(name); return g ? KH_BLOB + g.asset : null; };
 // equipment pictures can be mirrored either way; nothing else about them changes
 const gearFlipCss = g => g && (g.fh || g.fv) ? `scale(${g.fh ? -1 : 1},${g.fv ? -1 : 1})` : '';
-const gearFlipAttr = g => { const t = gearFlipCss(g); return t ? ` style="transform:${t}" data-flip="${t}"` : ''; };
+const gearFrameOf = g => g ? { ...(g.frame || {}), fh: !!g.fh, fv: !!g.fv } : null;
+const gearFlipAttr = g => g ? pfAttr(gearFrameOf(g)) : '';
+async function gearFrame(id, name){
+  const d = Gear.docs[id]; if (!d || !d.asset) return;
+  const fr = await pfOpen({ src: KH_BLOB + d.asset, fit: 'contain', frame: gearFrameOf(d), title: 'Frame the picture', label: name,
+    aspect: pfAspect(`[id="${id}"] .gear-thumb img`, 3) });
+  if (!fr) return;
+  try { await Art.db.doc('gear/' + id).update({ frame: { z: fr.z, x: fr.x, y: fr.y }, fh: fr.fh, fv: fr.fv, updated: new Date().toISOString() }); toast('Framing saved.'); }
+  catch (err) { toast('The framing didn’t save. Try again in a moment.'); }
+}
 async function gearFlip(id, k){
   const d = Gear.docs[id]; if (!d) return;
   try { await Art.db.doc('gear/' + id).update({ [k]: !d[k], updated: new Date().toISOString() }); }
@@ -4363,9 +4393,9 @@ function renderGear(){
     if (edit) {
       const t = document.createElement('span'); t.className = 'gear-tools gear-x';
       t.innerHTML = g && g.own
-        ? `<button type="button" class="btn" data-g="add">Replace</button><button type="button" class="btn" data-g="fh" aria-pressed="${!!g.fh}" title="Flip horizontally">Flip H</button><button type="button" class="btn" data-g="fv" aria-pressed="${!!g.fv}" title="Flip vertically">Flip V</button><button type="button" class="btn danger" data-g="del">Remove</button>`
+        ? `<button type="button" class="btn" data-g="add">Replace</button><button type="button" class="btn" data-g="frame" title="Zoom, move, or flip the picture">Adjust</button><button type="button" class="btn danger" data-g="del">Remove</button>`
         : `<button type="button" class="btn" data-g="add">${g ? 'Own image' : 'Add image'}</button>`;
-      t.onclick = e => { const a = e.target.dataset.g; if (a === 'add') gearPick(id); if (a === 'del') gearRemove(id, name); if (a === 'fh' || a === 'fv') gearFlip(id, a); };
+      t.onclick = e => { const a = e.target.dataset.g; if (a === 'add') gearPick(id); if (a === 'del') gearRemove(id, name); if (a === 'fh' || a === 'fv') gearFlip(id, a); if (a === 'frame') gearFrame(id, name); };
       td.append(t);
     }
   });
@@ -4456,6 +4486,131 @@ function artStyleAttr(d){
   return `object-position:${c.objectPosition};transform-origin:${c.transformOrigin}${c.transform ? `;transform:${c.transform}` : ''}`;
 }
 function artApply(img, d){ Object.assign(img.style, artCss(artFrame(d))); }
+/* ---------- framing for every uploaded picture ----------
+   The same zoom, pan and flip the site's art gets, for pictures players add
+   (portraits, droids, ships, weapons) and equipment pictures. A frame is
+   {z,x,y,fh,fv}; nothing is baked into the image. */
+function pfAttr(frame){
+  const f = artFrame({ frame }), c = artCss(f);
+  const flip = f.fh || f.fv ? `scale(${f.fh ? -1 : 1},${f.fv ? -1 : 1})` : '';
+  return ` style="object-position:${c.objectPosition};transform-origin:${c.transformOrigin}${c.transform ? `;transform:${c.transform}` : ''}"${flip ? ` data-flip="${flip}"` : ''}`;
+}
+// the same framing on a canvas (printed sheets): fit 'cover' fills the box, 'contain' fits inside it
+function pfDraw(x, im, dx, dy, w, h, frame, fit){
+  const f = artFrame({ frame }), iw = im.naturalWidth, ih = im.naturalHeight;
+  if (!iw || !ih) return;
+  const k = fit === 'contain' ? Math.min(w / iw, h / ih) : Math.max(w / iw, h / ih), z = f.z;
+  const qx = (f.fh ? 100 - f.x : f.x) / 100, qy = (f.fv ? 100 - f.y : f.y) / 100;
+  const ox = (w - iw * k) * qx, oy = (h - ih * k) * qy, P = qx * w, Q = qy * h;
+  // the box, back in picture pixels (it can reach past the picture's edge when it's fitted inside)
+  const L = (P - P / z - ox) / k, T = (Q - Q / z - oy) / k, R = L + w / (z * k), Bm = T + h / (z * k);
+  const sx = Math.max(0, L), sy = Math.max(0, T), ex = Math.min(iw, R), ey = Math.min(ih, Bm);
+  if (ex <= sx || ey <= sy) return;
+  const s = z * k, tx = (sx - L) * s, ty = (sy - T) * s, tw = (ex - sx) * s, th = (ey - sy) * s;
+  x.save();
+  x.translate(dx + (f.fh ? w : 0), dy + (f.fv ? h : 0)); x.scale(f.fh ? -1 : 1, f.fv ? -1 : 1);
+  x.drawImage(im, sx, sy, ex - sx, ey - sy, tx, ty, tw, th);
+  x.restore();
+}
+// the shape of the spot a picture fills, measured from the page when it's showing
+function pfAspect(sel, dflt){
+  const el = sel && document.querySelector(sel);
+  if (el) { const r = el.getBoundingClientRect(); if (r.width > 4 && r.height > 4) return r.width / r.height; }
+  return dflt;
+}
+/* the framing dialog: pfOpen({ src, aspect, fit, frame, title, label, ok }) resolves to the
+   new frame, or null if cancelled */
+let PF = null;
+function pfOpen(o){
+  if (!PF) {
+    const dlg = document.createElement('dialog'); dlg.id = 'pfDlg'; dlg.setAttribute('aria-labelledby', 'pfTitle');
+    dlg.innerHTML = `<h2 id="pfTitle">Frame the picture</h2><p class="for" id="pfFor"></p>
+      <div class="fx">
+        <div class="fx-stage" id="pfStage" tabindex="0" role="img" aria-label="Framing preview. Drag or use the arrow keys to move the picture; plus and minus zoom."><img id="pfImg" alt="" draggable="false"></div>
+        <div class="fx-bar">
+          <label class="fx-zoom">Zoom <input type="range" id="pfZoom" min="100" max="400" step="1" value="100" aria-label="Zoom"><output id="pfZoomOut">100%</output></label>
+          <button type="button" class="btn" id="pfFlipH" aria-pressed="false" title="Flip horizontally"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M9 7 3 17h6zM15 7l6 10h-6z"/></svg>Flip H</button>
+          <button type="button" class="btn" id="pfFlipV" aria-pressed="false" title="Flip vertically"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h18M7 9 17 3v6zM7 15l10 6v-6z"/></svg>Flip V</button>
+          <button type="button" class="btn" id="pfReset">Reset</button>
+        </div>
+        <p class="fx-hint">Drag to move the picture. Scroll, pinch, or use the slider to zoom. This frame is what your sheet shows.</p>
+      </div>
+      <div class="dlg-actions"><button type="button" class="btn" id="pfCancel">Cancel</button><button type="button" class="btn primary" id="pfOk">Save</button></div>`;
+    document.body.appendChild(dlg);
+    const stage = dlg.querySelector('#pfStage'), img = dlg.querySelector('#pfImg'), zoomEl = dlg.querySelector('#pfZoom');
+    const st = { fr: artFrame(null), fit: 'cover', a: 1, done: null };
+    const size = () => {
+      const a = st.a, maxH = Math.min(320, innerHeight * .45);
+      stage.style.aspectRatio = String(a);
+      stage.style.width = `min(100%, ${Math.round(maxH * a)}px)`;
+    };
+    const paint = () => {
+      Object.assign(img.style, artCss(st.fr), { objectFit: st.fit });
+      zoomEl.value = Math.round(st.fr.z * 100); dlg.querySelector('#pfZoomOut').textContent = Math.round(st.fr.z * 100) + '%';
+      dlg.querySelector('#pfFlipH').setAttribute('aria-pressed', st.fr.fh); dlg.querySelector('#pfFlipV').setAttribute('aria-pressed', st.fr.fv);
+    };
+    const room = () => {
+      const W = stage.clientWidth, H = stage.clientHeight, iw = img.naturalWidth || W, ih = img.naturalHeight || H;
+      const c = st.fit === 'contain' ? Math.min(W / iw, H / ih) : Math.max(W / iw, H / ih);
+      return { x: iw * c * st.fr.z - W, y: ih * c * st.fr.z - H };
+    };
+    const pan = (dx, dy) => {
+      const r = room();
+      if (r.x > .5) st.fr.x = Math.min(100, Math.max(0, st.fr.x - dx * 100 / r.x));
+      if (r.y > .5) st.fr.y = Math.min(100, Math.max(0, st.fr.y - dy * 100 / r.y));
+      paint();
+    };
+    const setZoom = z => { st.fr.z = Math.min(4, Math.max(1, z)); paint(); };
+    const pts = new Map(); let pinch = null;
+    stage.addEventListener('pointerdown', e => {
+      stage.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); stage.classList.add('drag');
+      if (pts.size === 2) { const [p, q] = [...pts.values()]; pinch = { d: Math.hypot(p.x - q.x, p.y - q.y), z: st.fr.z }; }
+    });
+    stage.addEventListener('pointermove', e => {
+      const p = pts.get(e.pointerId); if (!p) return;
+      const dx = e.clientX - p.x, dy = e.clientY - p.y; pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size === 2 && pinch) { const [a, b] = [...pts.values()]; setZoom(pinch.z * Math.hypot(a.x - b.x, a.y - b.y) / (pinch.d || 1)); }
+      else if (pts.size === 1) pan(dx, dy);
+    });
+    const up = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; if (!pts.size) stage.classList.remove('drag'); };
+    stage.addEventListener('pointerup', up); stage.addEventListener('pointercancel', up);
+    stage.addEventListener('wheel', e => { e.preventDefault(); setZoom(st.fr.z * Math.exp(-e.deltaY * .0015)); }, { passive: false });
+    stage.addEventListener('keydown', e => {
+      const k = e.key, s = e.shiftKey ? 30 : 8;
+      if (k === 'ArrowLeft') pan(s, 0); else if (k === 'ArrowRight') pan(-s, 0);
+      else if (k === 'ArrowUp') pan(0, s); else if (k === 'ArrowDown') pan(0, -s);
+      else if (k === '+' || k === '=') setZoom(st.fr.z + .1); else if (k === '-' || k === '_') setZoom(st.fr.z - .1);
+      else return;
+      e.preventDefault();
+    });
+    zoomEl.oninput = () => setZoom(+zoomEl.value / 100);
+    dlg.querySelector('#pfFlipH').onclick = () => { st.fr.fh = !st.fr.fh; paint(); };
+    dlg.querySelector('#pfFlipV').onclick = () => { st.fr.fv = !st.fr.fv; paint(); };
+    dlg.querySelector('#pfReset').onclick = () => { st.fr = { z: 1, x: 50, y: 50, fh: false, fv: false }; paint(); };
+    const round = n => Math.round(n * 100) / 100;
+    const finish = v => { const d = st.done; st.done = null; if (dlg.open) dlg.close(); if (d) d(v); };
+    dlg.querySelector('#pfCancel').onclick = () => finish(null);
+    dlg.querySelector('#pfOk').onclick = () => finish({ z: round(st.fr.z), x: round(st.fr.x), y: round(st.fr.y), fh: st.fr.fh, fv: st.fr.fv });
+    dlg.addEventListener('close', () => finish(null));
+    addEventListener('resize', () => { if (dlg.open) size(); });
+    PF = { dlg, img, st, size, paint };
+  }
+  const { dlg, img, st, size, paint } = PF;
+  if (st.done) st.done(null);
+  st.fr = artFrame({ frame: o.frame }); st.fit = o.fit || 'cover'; st.a = o.aspect || 1;
+  dlg.querySelector('#pfTitle').textContent = o.title || 'Frame the picture';
+  dlg.querySelector('#pfFor').textContent = o.label || '';
+  dlg.querySelector('#pfFor').hidden = !o.label;
+  dlg.querySelector('#pfOk').textContent = o.ok || 'Save';
+  dlg.querySelector('#pfStage').classList.toggle('pf-contain', st.fit === 'contain');
+  return new Promise(res => {
+    st.done = res;
+    img.onload = () => { size(); paint(); };
+    img.src = o.src; size(); paint();
+    dlg.showModal();
+    setTimeout(() => dlg.querySelector('#pfStage').focus({ preventScroll: true }), 50);
+  });
+}
 // the art doc behind a /_blob/ picture, so cards built anywhere keep its framing
 function artDocBySrc(src){
   const m = /(?:\/_blob|\/kh-uploads)\/([^?#/]+)/.exec(src || ''); if (!m) return null;
@@ -5736,7 +5891,7 @@ ngFillRoles();
     const bits = [];
     try {
       const c = typeof CMStore !== 'undefined' ? CMStore.list()[0] : null;
-      if (c) { const d = cmDerive(c); bits.push(`<button type="button" class="hc-chip" data-char="${esc(c.id)}">${c.photo ? `<img src="${c.photo}" alt="">` : '<span class="rg" aria-hidden="true">2</span>'}<span><small>Continue playing</small><b>${esc(c.name || 'Unnamed')}</b><i>Level ${d.L} ${esc(d.cls.name)} · HP ${c.marks.hp}/${d.hp}</i></span></button>`); }
+      if (c) { const d = cmDerive(c); bits.push(`<button type="button" class="hc-chip" data-char="${esc(c.id)}">${c.photo ? `<span class="hc-pic"><img src="${c.photo}" alt=""${pfAttr(c.photoFrame)}></span>` : '<span class="rg" aria-hidden="true">2</span>'}<span><small>Continue playing</small><b>${esc(c.name || 'Unnamed')}</b><i>Level ${d.L} ${esc(d.cls.name)} · HP ${c.marks.hp}/${d.hp}</i></span></button>`); }
     } catch (e) {}
     try {
       const s = typeof CT !== 'undefined' && CT.s;
@@ -7574,6 +7729,7 @@ function khLogo(ctx, x, y, w, h, color = '#000'){
 const khLogoReady = () => document.fonts.load(`100px ${KH_LOGO_FONT}`).catch(() => {});
 let cmPhotoImg = null;
 const cmImgs = {};   // weapon pictures for the printed sheet, loaded ahead of drawing
+const cmWeaponFrame = (ch, slot, w) => { if (!w) return null; const a = (ch.gearArt || {})[slot]; return a && a.name === w.name ? a.frame : gearFrameOf(gearDoc(w.name)); };
 const cmWeaponSrc = (ch, slot, w) => { if (!w) return null; const a = (ch.gearArt || {})[slot]; return a && a.name === w.name ? a.src : gearSrc(w.name); };
 async function cmLoadImg(src){
   if (!src || cmImgs[src]) return;
@@ -7657,10 +7813,9 @@ function cmSheet(ch, page, withMarks){
     // portrait: the photo in grayscale, or an empty frame to draw in
     cmBox(x, px, y, PW, PH, 18, 4);
     if (cmPhotoImg && cmPhotoImg.src === ch.photo && cmPhotoImg.complete && cmPhotoImg.naturalWidth) {
-      const iw = cmPhotoImg.naturalWidth, ih = cmPhotoImg.naturalHeight, fw = PW - 16, fh = PH - 16, k = Math.max(fw / iw, fh / ih);
-      const sw = fw / k, sh = fh / k;
+      const fw = PW - 16, fh = PH - 16;
       x.save(); icRound(x, px + 8, y + 8, fw, fh, 12); x.clip(); x.filter = 'grayscale(1) contrast(1.08)';
-      x.drawImage(cmPhotoImg, (iw - sw) / 2, (ih - sh) / 2, sw, sh, px + 8, y + 8, fw, fh);
+      pfDraw(x, cmPhotoImg, px + 8, y + 8, fw, fh, ch.photoFrame);
       x.restore(); x.filter = 'none';
     } else { cmLabel(x, 'Portrait', px + 28, y + 46, 24); }
     // logo, top left
@@ -7750,8 +7905,7 @@ function cmSheet(ch, page, withMarks){
         const bx = M + lw2 - PA - 14, by = ly + 14, bw = PA, bh = 162, saber = !!(((ch.gearArt || {})[slot] || {}).ls);
         x.save(); icRound(x, bx, by, bw, bh, 10); x.clip();
         if (saber) { x.fillStyle = '#141b25'; x.fillRect(bx, by, bw, bh); }
-        const k = Math.min((bw - 16) / pic.naturalWidth, (bh - 16) / pic.naturalHeight), iw = pic.naturalWidth * k, ih = pic.naturalHeight * k;
-        x.drawImage(pic, bx + (bw - iw) / 2, by + (bh - ih) / 2, iw, ih); x.restore(); x.fillStyle = '#000';
+        pfDraw(x, pic, bx + 8, by + 8, bw - 16, bh - 16, cmWeaponFrame(ch, slot, w), 'contain'); x.restore(); x.fillStyle = '#000';
       }
       const tw = lw2 - 48 - (PA ? PA + 20 : 0), clip = (t, f) => { x.font = f; while (x.measureText(t).width > tw && t.length > 3) t = t.slice(0, -2) + '…'; return t; };
       cmLabel(x, clip(lab + kbc, F(700, 22)), M + 24, ly + 40, 22);
@@ -7983,7 +8137,7 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
     $('#chRoster').innerHTML = list.length ? list.map(c => {
       const d = cmDerive(c), on = CM.saved && CM.ch && CM.ch.id === c.id;
       return `<button type="button" class="ch-card${on ? ' on' : ''}" data-open="${esc(c.id)}">
-        <span class="ch-photo">${c.photo ? `<img src="${c.photo}" alt="">` : `<i class="rg" aria-hidden="true">R</i>`}</span>
+        <span class="ch-photo">${c.photo ? `<img src="${c.photo}" alt=""${pfAttr(c.photoFrame)}>` : `<i class="rg" aria-hidden="true">R</i>`}</span>
         <span class="ch-info"><b>${esc(c.name || 'Unnamed')}</b>${c.player ? `<small class="ch-player">Played by ${esc(c.player)}</small>` : ''}<small>Level ${d.L} ${esc(d.ancestryLabel)} ${esc(d.cls.name)}</small>
         <small class="ch-trk"><em class="hp">HP ${c.marks.hp}/${d.hp}</em><em class="st">Stress ${c.marks.stress}/${d.stress}</em><em class="hope">Hope ${c.marks.hope}</em>${d.droid ? `<em class="dr">${esc(d.droid.name)} ${Math.min(+c.marks.droidStress || 0, d.droid.stress)}/${d.droid.stress}</em>` : ''}</small></span>
       </button>`;
@@ -8202,7 +8356,7 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
       ...cls.cards.filter(c => (ch.cards || []).includes(c.name)).map(c => ({ kind: 'card', title: c.name, label: c.type, level: c.level, recall: c.recall, color: KC_COLORS[cls.id], desc: c.flavor ? `<em>${esc(c.flavor)}</em>` : '', body: `<p>${esc(c.text)}</p>`, ...wzArt('card', c.name) })),
     ].filter(Boolean);
     return `<div class="wz-review">
-        <div class="wz-hero">${ch.photo ? `<img src="${ch.photo}" alt="">` : ''}<div><h4>${esc(ch.name || 'Unnamed character')}</h4>
+        <div class="wz-hero">${ch.photo ? `<span class="wz-pic"><img src="${ch.photo}" alt=""${pfAttr(ch.photoFrame)}></span>` : ''}<div><h4>${esc(ch.name || 'Unnamed character')}</h4>
           <p>${esc(d.ancestryLabel)} ${esc(cls.name)}${d.sub ? ' · ' + esc(d.sub.name) : ''} · ${esc(ch.community)}${ch.player ? ` · played by ${esc(ch.player)}` : ''}</p></div></div>
         <div class="wz-stats">${[['Evasion', d.evasion], ['HP', d.hp], ['Stress', d.stress], ['Armor', d.armorScore], ['Thresholds', `${d.major ?? '—'} / ${d.severe ?? '—'}`]].map(([l, v]) => `<div><small>${l}</small><b>${v}</b></div>`).join('')}</div>
         <div class="wz-stats wz-traits">${TRAITS.map(t => `<div><small>${cap1(t)}</small><b>${sgn(+ch.traits[t] || 0)}</b></div>`).join('')}</div>
@@ -8342,7 +8496,7 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
       <h4 class="wz-sub">Background</h4>
       <div class="wz-grid dwz-quirks">${pick('reprog', '0', !dr.reprog, `<div class="dwz-q"><b>Built for this</b><p>It’s always been a helper droid.</p></div>`, 'Not reprogrammed')}${pick('reprog', '1', !!dr.reprog, `<div class="dwz-q"><b>Reprogrammed</b><p>A repurposed security, battle, or assassin droid. Gains a Former Function Experience and a Residual Directive the GM can invoke.</p></div>`, 'Reprogrammed')}</div>
       ${D.chooseTrait ? `<h4 class="wz-sub">Command trait</h4><p class="lz-mini">The trait you roll to command it.</p><div class="lz-chips">${['Instinct', 'Knowledge'].map(t => `<button type="button" class="af-chip" data-dpick="cmdTrait" data-v="${t}" aria-pressed="${D.trait === t}">${t} ${sgn(+d.traits[t.toLowerCase()] || 0)}</button>`).join('')}</div>` : `<p class="lz-mini">You command it with <b>${esc(D.trait)}</b>.</p>`}`;
-    if (s.id === 'look') body = `<div class="dwz-look"><div class="cm-photo-frame">${dr.photo ? `<img src="${dr.photo}" alt="">` : dwzIcon(D.frame.name)}</div><div>
+    if (s.id === 'look') body = `<div class="dwz-look"><div class="cm-photo-frame">${dr.photo ? `<img src="${dr.photo}" alt=""${pfAttr(dr.photoFrame)}>` : dwzIcon(D.frame.name)}</div><div>
         <label class="dwz-l">Name<span class="cm-inline"><input data-dk="name" value="${esc(dr.name || '')}" maxlength="40" placeholder="R5-K7, Lucky, Doc…"><button type="button" class="btn cm-namebtn" data-drn aria-label="Suggest a droid name">🎲</button></span></label>
         <label class="dwz-l">Look<textarea data-dk="look" rows="3" placeholder="Color scheme, markings, dents, mismatched parts">${esc(dr.look || '')}</textarea></label>
         <label class="btn cm-upload">${dr.photo ? 'Replace picture' : 'Upload a picture'}<input type="file" accept="image/png,image/jpeg,image/webp" data-dphoto2 hidden></label>
@@ -8350,7 +8504,7 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
     if (s.id === 'exps') body = `<div class="lz-chips">${D.frame.suggested.split(/,\s*/).map(x => `<button type="button" class="af-chip" data-dsug2="${esc(x)}">+ ${esc(x)}</button>`).join('')}</div>
       <div class="cm-exps" style="margin-top:12px">${droidExpLabels(ch, D).map((l, i) => `<div class="cm-exp"><input data-dexp="${i}" maxlength="60" value="${esc(D.expNames[i])}" placeholder="${esc(l)}"><span class="cm-expmod">+${D.expMods[i]}</span></div>`).join('')}</div>`;
     if (s.id === 'ups') body = droidUpGrid(ch);
-    if (s.id === 'done') body = `<div class="dwz-done"><div class="cm-photo-frame">${dr.photo ? `<img src="${dr.photo}" alt="">` : dwzIcon(D.frame.name)}</div><div>
+    if (s.id === 'done') body = `<div class="dwz-done"><div class="cm-photo-frame">${dr.photo ? `<img src="${dr.photo}" alt=""${pfAttr(dr.photoFrame)}>` : dwzIcon(D.frame.name)}</div><div>
         <h4>${esc(D.name)}</h4><p>${esc(D.frame.name)}${D.quirk ? ' · ' + esc(D.quirk.name) : ''}${dr.reprog ? ' · reprogrammed' : ''}</p>
         <div class="wz-stats">${[['Evasion', D.evasion], ['Stress', D.stress], ['Attack', `${d.prof}${D.die}`], ['Range', D.range], ['Command', `${D.trait} ${sgn(D.traitVal)}`]].map(([l, v]) => `<div><small>${l}</small><b>${esc(String(v))}</b></div>`).join('')}</div>
         <p class="wz-line"><b>Experiences:</b> ${esc(D.expNames.map((n, i) => n && `${n} +${D.expMods[i]}`).filter(Boolean).join(', ') || 'none yet')}${D.ups.length ? ` · <b>Upgrades:</b> ${esc(D.ups.map(u => u.n).join(', '))}` : ''}</p></div></div>`;
@@ -8600,10 +8754,10 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
         <label class="cm-lvlpick">Level<select data-k="level" data-num>${Array.from({ length: 10 }, (_, i) => opt(i + 1, `Level ${i + 1}`, ch.level == i + 1)).join('')}</select></label>
       </div>
       <div class="cm-photo">
-        <div class="cm-photo-frame">${ch.photo ? `<img src="${ch.photo}" alt="${esc(ch.name || 'Character')} portrait">` : '<span>No photo yet</span>'}</div>
+        <div class="cm-photo-frame">${ch.photo ? `<img src="${ch.photo}" alt="${esc(ch.name || 'Character')} portrait"${pfAttr(ch.photoFrame)}>` : '<span>No photo yet</span>'}</div>
         <div class="cm-photo-actions">
           <label class="btn cm-upload">${ch.photo ? 'Replace photo' : 'Upload a photo'}<input type="file" accept="image/png,image/jpeg,image/webp" data-photo hidden></label>
-          ${ch.photo ? '<button type="button" class="btn danger" data-photo-remove>Remove</button>' : ''}
+          ${ch.photo ? '<button type="button" class="btn" data-photo-frame>Adjust</button><button type="button" class="btn danger" data-photo-remove>Remove</button>' : ''}
           <p class="cm-help">Shown in Play and printed in black and white on your sheet. It’s saved with your character.</p>
         </div>
       </div>
@@ -8843,7 +8997,9 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
         if (url.length < 150000) break;
         if (q > .6) q -= .1; else max = Math.round(max * .8);
       }
-      if (droid) { CM.ch.droid.photo = url; } else CM.ch.photo = url;
+      const fr = await pfOpen({ src: url, aspect: 4 / 5, title: droid ? 'Frame your droid' : 'Frame your portrait', ok: 'Use this picture' });
+      if (!fr) { toast('Picture not changed.'); return; }
+      if (droid) { CM.ch.droid.photo = url; CM.ch.droid.photoFrame = fr; } else { CM.ch.photo = url; CM.ch.photoFrame = fr; }
       renderBuild(); renderPlay(); touch(); renderRosterSoon();
       toast('Photo added.');
     } catch (e) { toast('That image couldn’t be read. Try another.'); }
@@ -8865,8 +9021,14 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
       if (e.target.closest('[data-wexit]')) { CM.wiz = null; renderBuild(); toast('Full editor. Everything you picked is kept.'); return; }
       if (e.target.closest('[data-wfinish]')) { wzFinish(); return; }
     }
-    if (e.target.matches('[data-dphoto-remove]')) { delete CM.ch.droid.photo; renderBuild(); renderPlay(); touch(); return; }
-    if (e.target.matches('[data-photo-remove]')) { delete CM.ch.photo; renderBuild(); renderPlay(); touch(); return; }
+    if (e.target.matches('[data-photo-frame],[data-dphoto-frame]')) {
+      const isD = e.target.matches('[data-dphoto-frame]'), o = isD ? CM.ch.droid : CM.ch;
+      if (o && o.photo) pfOpen({ src: o.photo, frame: o.photoFrame, aspect: 4 / 5, title: isD ? 'Frame your droid' : 'Frame your portrait' })
+        .then(fr => { if (!fr) return; o.photoFrame = fr; renderBuild(); renderPlay(); touch(); renderRosterSoon(); });
+      return;
+    }
+    if (e.target.matches('[data-dphoto-remove]')) { delete CM.ch.droid.photo; delete CM.ch.droid.photoFrame; renderBuild(); renderPlay(); touch(); return; }
+    if (e.target.matches('[data-photo-remove]')) { delete CM.ch.photo; delete CM.ch.photoFrame; renderBuild(); renderPlay(); touch(); return; }
     if (e.target.id === 'cmSuggestTraits') { ch.traits = { ...cls.traits }; renderBuild(); touch(); }
     if (e.target.id === 'cmSuggestGear') {
       const parts = (cls.gear || '').split(';').map(s => s.trim().toLowerCase());
@@ -8953,10 +9115,10 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
         <label class="cm-wide">Look (color scheme, markings, dents)<textarea data-dk="look" rows="2">${esc(dr.look || '')}</textarea></label>
       </div>
       <div class="cm-photo">
-        <div class="cm-photo-frame">${dr.photo ? `<img src="${dr.photo}" alt="${esc(dr.name || 'Droid')} photo">` : '<span>No droid photo yet</span>'}</div>
+        <div class="cm-photo-frame">${dr.photo ? `<img src="${dr.photo}" alt="${esc(dr.name || 'Droid')} photo"${pfAttr(dr.photoFrame)}>` : '<span>No droid photo yet</span>'}</div>
         <div class="cm-photo-actions">
           <label class="btn cm-upload">${dr.photo ? 'Replace droid photo' : 'Upload a droid photo'}<input type="file" accept="image/png,image/jpeg,image/webp" data-dphoto hidden></label>
-          ${dr.photo ? '<button type="button" class="btn danger" data-dphoto-remove>Remove</button>' : ''}
+          ${dr.photo ? '<button type="button" class="btn" data-dphoto-frame>Adjust</button><button type="button" class="btn danger" data-dphoto-remove>Remove</button>' : ''}
           <p class="cm-help">Shown on your droid’s card in the character sheet. It’s saved with your character. Or build its look in the <a class="xref" href="#droid-depot">Droid Depot</a>.</p>
         </div>
       </div>
@@ -9008,7 +9170,7 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
     const dText = CM.cardView === 'text' || !dCards.length;
     return `<section class="cm-droidcard${off ? ' offline' : ''}" aria-label="Droid companion">
       <div class="cm-droid-top${ch.droid.photo ? '' : ' nophoto'}">
-        ${ch.droid.photo ? `<button type="button" class="cm-droid-pic" aria-label="Enlarge ${esc(D.name)}"><img src="${ch.droid.photo}" alt="${esc(D.name)}"></button>` : ''}
+        ${ch.droid.photo ? `<button type="button" class="cm-droid-pic" aria-label="Enlarge ${esc(D.name)}"><img src="${ch.droid.photo}" alt="${esc(D.name)}"${pfAttr(ch.droid.photoFrame)}></button>` : ''}
         <div class="cm-droid-info">
           <div class="cm-droid-head">
             <div class="cm-droid-id"><small>Droid companion</small><h4>${esc(D.name)}</h4>
@@ -9405,8 +9567,8 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
     const gimg = n => { const src = gearSrc(n); return src ? `<button type="button" class="cm-gearimg" aria-label="Enlarge ${esc(n)}"><img src="${src}" alt="${esc(n)}"${gearFlipAttr(gearDoc(n))}></button>` : ''; };
     const gart = (slot, name) => { const a = (ch.gearArt || {})[slot]; return a && a.name === name ? a.src : null; };
     const gls = (slot, name) => { const a = (ch.gearArt || {})[slot]; return !!(a && a.name === name && a.ls); };
-    const gpic = (slot, name) => { const c = gart(slot, name); return c ? `<button type="button" class="cm-gearimg custom${gls(slot, name) ? ' saber' : ''}" aria-label="Enlarge ${esc(name)}"><img src="${c}" alt="${esc(name)}"></button>` : gimg(name); };
-    const wart = (slot, name) => `<div class="cm-wmenu"><button type="button" class="cm-wdots" aria-haspopup="true" aria-expanded="false" aria-label="Options for ${esc(name)}" title="Options"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.6"/><circle cx="8" cy="8" r="1.6"/><circle cx="13" cy="8" r="1.6"/></svg></button><div class="cm-wpop" role="menu" hidden><button type="button" role="menuitem" data-wnick="${slot}" data-wname="${esc(name)}">${cmNick(ch, slot, name) ? 'Rename it' : 'Name it'}</button>${lsStanceFor(name) ? `<button type="button" role="menuitem" data-wls="${slot}" data-wname="${esc(name)}">${gls(slot, name) ? 'Use a different workbench lightsaber' : 'Use a lightsaber from the workbench'}</button>` : ''}<label role="menuitem">${gart(slot, name) ? 'Change picture' : 'Use your own picture'}<input type="file" accept="image/png,image/jpeg,image/webp" data-wart="${slot}" data-wname="${esc(name)}" hidden></label>${gart(slot, name) ? `<button type="button" role="menuitem" data-wart-reset="${slot}">Back to the default picture</button>` : ''}</div></div>`;
+    const gpic = (slot, name) => { const c = gart(slot, name); return c ? `<button type="button" class="cm-gearimg custom${gls(slot, name) ? ' saber' : ''}" aria-label="Enlarge ${esc(name)}"><img src="${c}" alt="${esc(name)}"${pfAttr(((ch.gearArt || {})[slot] || {}).frame)}></button>` : gimg(name); };
+    const wart = (slot, name) => `<div class="cm-wmenu"><button type="button" class="cm-wdots" aria-haspopup="true" aria-expanded="false" aria-label="Options for ${esc(name)}" title="Options"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.6"/><circle cx="8" cy="8" r="1.6"/><circle cx="13" cy="8" r="1.6"/></svg></button><div class="cm-wpop" role="menu" hidden><button type="button" role="menuitem" data-wnick="${slot}" data-wname="${esc(name)}">${cmNick(ch, slot, name) ? 'Rename it' : 'Name it'}</button>${lsStanceFor(name) ? `<button type="button" role="menuitem" data-wls="${slot}" data-wname="${esc(name)}">${gls(slot, name) ? 'Use a different workbench lightsaber' : 'Use a lightsaber from the workbench'}</button>` : ''}<label role="menuitem">${gart(slot, name) ? 'Change picture' : 'Use your own picture'}<input type="file" accept="image/png,image/jpeg,image/webp" data-wart="${slot}" data-wname="${esc(name)}" hidden></label>${gart(slot, name) ? `<button type="button" role="menuitem" data-wart-frame="${slot}">Adjust picture</button>` : ''}${gart(slot, name) ? `<button type="button" role="menuitem" data-wart-reset="${slot}">Back to the default picture</button>` : ''}</div></div>`;
     const nk = (slot, name) => { const n = cmNick(ch, slot, name); return n && n.nick ? `<b>${esc(n.nick)}</b><span class="cm-wreal">${esc(name)}</span>` : `<b>${esc(name)}</b>`; };
     const nd = (slot, name) => { const n = cmNick(ch, slot, name); return n && n.desc ? `<span class="cm-wdesc">${esc(n.desc)}</span>` : ''; };
     const bt = x => bladeType(x && x.name), kb = ch.blade && KYBER.names[ch.blade] ? ch.blade : '';
@@ -9414,7 +9576,7 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
     const w = (x, label, slot) => x ? `<div class="cm-weapon${bt(x) ? ' has-blade' : ''}">${gpic(slot, x.name)}<small>${label}</small>${nk(slot, x.name)}${blade(x)}<span>${esc(x.trait)} · ${esc(x.range)} · ${esc(x.damage.replace(/^d/, d.prof + 'd'))}${x.feature && x.feature !== '—' ? ' · ' + esc(x.feature) : ''}</span>${nd(slot, x.name)}${wart(slot, x.name)}</div>` : '';
     $('#cmPlay').innerHTML = `
       <div class="cm-hero${ch.photo ? '' : ' nophoto'}">
-        ${ch.photo ? `<button type="button" class="cm-portrait" aria-label="Enlarge portrait"><img src="${ch.photo}" alt="${esc(ch.name || 'Character')} portrait"></button>` : ''}
+        ${ch.photo ? `<button type="button" class="cm-portrait" aria-label="Enlarge portrait"><img src="${ch.photo}" alt="${esc(ch.name || 'Character')} portrait"${pfAttr(ch.photoFrame)}></button>` : ''}
         <div class="cm-hero-main"><div class="cm-id"><h3>${esc(ch.name || 'Unnamed character')}</h3>${ch.name ? `<p class="cm-play-aur${ch.classId === 'force-adept' ? ' prime-jedi' : ''}" aria-hidden="true">${esc(ch.name)}</p>` : ''}<p class="cm-sub-line">${esc(d.ancestryLabel)} ${esc(d.cls.name)} · ${esc(d.sub ? d.sub.name + ' ' + d.subStage.toLowerCase() : '')}${d.mc && d.mc.cls ? ' · multiclass ' + esc(d.mc.cls.name) : ''} · ${esc(ch.community)}</p></div>
           <div class="cm-level" aria-label="Level ${d.L}, tier ${d.tier}"><small>Level</small><b>${d.L}</b><span>Tier ${d.tier}</span></div></div>
         <div class="cm-hero-stats">
@@ -9512,7 +9674,9 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
         if (url.length < 180000) break;
         if (q > .6) q -= .1; else max = Math.round(max * .8);
       }
-      CM.ch.gearArt = { ...(CM.ch.gearArt || {}), [slot]: { name, src: url } };
+      const fr = await pfOpen({ src: url, fit: 'contain', aspect: pfAspect('#cmPlay .cm-weapon .cm-gearimg img', 3.2), title: `Frame your ${name}`, ok: 'Use this picture' });
+      if (!fr) { toast('Picture not changed.'); return; }
+      CM.ch.gearArt = { ...(CM.ch.gearArt || {}), [slot]: { name, src: url, frame: fr } };
       touch(); renderPlay(); toast(`New art for your ${name}.`);
     } catch (er) { toast('That image couldn’t be read. Try another.'); }
   });
@@ -9545,7 +9709,14 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
   $('#cmPlay').addEventListener('click', e => {
     const dots = e.target.closest('.cm-wdots');
     if (dots) { const m = dots.closest('.cm-wmenu'), pop = m.querySelector('.cm-wpop'), open = pop.hidden; wmClose(m); pop.hidden = !open; dots.setAttribute('aria-expanded', open); return; }
-    if (e.target.closest('.cm-wpop [data-wnick], .cm-wpop [data-wart-reset]')) wmClose();
+    if (e.target.closest('.cm-wpop [data-wnick], .cm-wpop [data-wart-reset], .cm-wpop [data-wart-frame]')) wmClose();
+    const wf = e.target.closest('[data-wart-frame]');
+    if (wf) {
+      const a = (CM.ch.gearArt || {})[wf.dataset.wartFrame]; if (!a) return;
+      pfOpen({ src: a.src, frame: a.frame, fit: 'contain', aspect: pfAspect('#cmPlay .cm-weapon .cm-gearimg img', 3.2), title: `Frame your ${a.name}` })
+        .then(fr => { if (!fr) return; a.frame = fr; touch(); renderPlay(); });
+      return;
+    }
     const gz = e.target.closest('.cm-gearimg'); if (gz) { zoom(gz.querySelector('img')); return; }
     const wn = e.target.closest('[data-wnick]');
     if (wn) {
@@ -10194,7 +10365,7 @@ const CT = { s: null };
     box.innerHTML = list.length ? list.map(([id, sh]) => {
       const veh = sh.kind === 'vehicle' || sh.scale === 'Vehicle', down = sh.hull >= sh.hullMax;
       return `<div class="ct-ship${down ? ' down' : ''}" data-ship="${id}">
-        <div class="ct-ship-head">${sh.photo ? `<img class="ct-face" src="${sh.photo}" alt="">` : ''}<div><b>${esc(sh.name || sh.model)}</b><small>${esc(sh.name ? sh.model + ' · ' : '')}${esc(sh.scale)} · Tier ${sh.tier}</small></div></div>
+        <div class="ct-ship-head">${sh.photo ? `<span class="ct-face"><img src="${sh.photo}" alt=""${pfAttr(sh.photoFrame)}></span>` : ''}<div><b>${esc(sh.name || sh.model)}</b><small>${esc(sh.name ? sh.model + ' · ' : '')}${esc(sh.scale)} · Tier ${sh.tier}</small></div></div>
         <p class="ct-stats"><span><b>Evasion</b> ${sh.evasion}</span><span><b>Thr</b> ${sh.maj}/${sh.sev}</span><span><b>Speed</b> ${esc(sh.speed || '—')}</span></p>
         <div class="ct-track"><span class="ct-tl hp">Hull <i>${sh.hull}/${sh.hullMax}</i></span>${trk(id, 'hull', sh.hullMax, sh.hull, 'box', 'Hull')}</div>
         <div class="ct-track"><span class="ct-tl st">Stress <i>${sh.stress}/${sh.stressMax}</i></span>${trk(id, 'stress', sh.stressMax, sh.stress, 'box', 'Stress')}</div>
@@ -11619,7 +11790,7 @@ const DD = (() => {
     const c = CMStore.cache[$('#ddChar').value]; if (!c) return;
     const art = await droidCanvas(480, d.bg === 'none' ? 'plain' : d.bg);
     const url = art.toDataURL('image/jpeg', .86);
-    c.droid = c.droid || droidBlank(); c.droid.photo = url;
+    c.droid = c.droid || droidBlank(); c.droid.photo = url; delete c.droid.photoFrame;
     if ($('#ddUseName').checked && d.name.trim()) c.droid.name = d.name.trim();
     const ok = await CMStore.save(c);
     if (CM.ch && CM.ch.id === c.id) { CM.ch.droid = JSON.parse(JSON.stringify(c.droid)); if (CM.refresh) CM.refresh(); }
@@ -13236,7 +13407,7 @@ function khForm({ title, fields, data = {}, ok = 'Save', del = false }){
           <div class="shz-stats"><span>Evasion <b>${esc(x.evasion)}</b></span><span>Hull <b>${x.hull}</b></span><span>Stress <b>${x.stress}</b></span><span>${isVeh(x) ? 'Armor' : 'Shields'} <b>${x.shields}</b></span><span>Thresholds <b>${esc(x.thr)}</b></span><span>${esc(x.speed)} · ${isVeh(x) ? 'Seats ' + esc(x.seats) : esc(x.hyper)}</span></div>
           <span><i>Weapons:</i> ${esc((x.weapons || []).join(', ') || '—')}</span><span><i>Stations:</i> ${esc(x.stations)}</span>${x.features ? `<small>${esc(x.features)}</small>` : ''}</div></div>`, x.name)).join('')}</div>` : ''; }).join(''); }
     if (shz.step === 2) { p = 'Every good ship has a name. Leave it blank to go by its model.';
-      h = `<div class="dwz-look"><div class="cm-photo-frame shz-photo">${shz.photo ? `<img src="${shz.photo}" alt="">` : shzArt(m) || shzIco(m.scale)}</div><div>
+      h = `<div class="dwz-look"><div class="cm-photo-frame shz-photo">${shz.photo ? `<img src="${shz.photo}" alt=""${pfAttr(shz.photoFrame)}>` : shzArt(m) || shzIco(m.scale)}</div><div>
         <label class="dwz-l">Ship’s name<span class="cm-inline"><input id="shzName" value="${esc(shz.name)}" maxlength="40" placeholder="${esc(m.name)}"><button type="button" class="btn cm-namebtn" id="shzRoll" aria-label="Suggest a name">🎲</button></span></label>
         <label class="btn cm-upload">${shz.photo ? 'Replace picture' : 'Load a picture of your ship'}<input type="file" id="shzPhoto" accept="image/png,image/jpeg,image/webp" hidden></label>
         <p class="lz-mini">It shows on the viewscreen of your ship’s console.</p></div></div>`; }
@@ -13244,7 +13415,7 @@ function khForm({ title, fields, data = {}, ok = 'Save', del = false }){
       const st = stationsFrom(m.stations); let names = []; try { names = CMStore.list().map(c => c.name).filter(Boolean); } catch (e) {}
       h = `<div class="shz-crew">${st.map((x, i) => `<label><span>${esc(x.role)}</span><input data-zcrew="${i}" list="shzCrewList" value="${esc(shz.crew[i] || '')}" placeholder="— unmanned —"></label>`).join('')}</div><datalist id="shzCrewList">${names.map(n => `<option value="${esc(n)}">`).join('')}</datalist>`; }
     if (shz.step === 4) { p = 'Everything look right? Launching adds the ship for your whole crew.';
-      h = `<div class="dwz-done"><div class="cm-photo-frame shz-photo">${shz.photo ? `<img src="${shz.photo}" alt="">` : shzArt(m) || shzIco(m.scale)}</div><div><h4>${esc(shz.name || m.name)}</h4><p>${esc(m.name)} · ${esc(m.scale)} · Tier ${m.tier}</p>
+      h = `<div class="dwz-done"><div class="cm-photo-frame shz-photo">${shz.photo ? `<img src="${shz.photo}" alt=""${pfAttr(shz.photoFrame)}>` : shzArt(m) || shzIco(m.scale)}</div><div><h4>${esc(shz.name || m.name)}</h4><p>${esc(m.name)} · ${esc(m.scale)} · Tier ${m.tier}</p>
         <div class="wz-stats">${[['Evasion', m.evasion], ['Hull', m.hull], ['Stress', m.stress], [isVeh(m) ? 'Armor' : 'Shields', m.shields], ['Thresholds', m.thr]].map(([l, v]) => `<div><small>${l}</small><b>${esc(String(v))}</b></div>`).join('')}</div>
         <p class="wz-line"><b>Crew:</b> ${esc(stationsFrom(m.stations).map((x, i) => `${x.role}: ${shz.crew[i] || 'unmanned'}`).join(' · '))}</p></div></div>`; }
     return `<div class="cm-wiz shz">
@@ -13271,7 +13442,7 @@ function khForm({ title, fields, data = {}, ok = 'Save', del = false }){
     if (t.id === 'shzCancel') { shz = null; render(); return true; }
     if (t.closest('#shzRoll')) { shz.name = SHZ_NAMES[Math.floor(Math.random() * SHZ_NAMES.length)]; $('#shzName').value = shz.name; return true; }
     if (t.id === 'shzLaunch') {
-      const m = MODELS[shz.model], id = KHStore.newId('s'), data = { ...fromModel(m), name: shz.name.trim(), photo: shz.photo || '' };
+      const m = MODELS[shz.model], id = KHStore.newId('s'), data = { ...fromModel(m), name: shz.name.trim(), photo: shz.photo || '', ...(shz.photo && shz.photoFrame ? { photoFrame: shz.photoFrame } : {}) };
       data.stations = data.stations.map((st, i) => ({ ...st, crew: shz.crew[i] || '' }));
       try { await KHStore.set('ships', id, data); ships[id] = data; cur = id; try { localStorage.setItem('kh-ship-cur', id); } catch (er) {} shz = null; render(); toast(`${data.name || data.model} is ready to fly.`); }
       catch (er) { toast('The ship didn’t save.'); }
@@ -13295,7 +13466,7 @@ function khForm({ title, fields, data = {}, ok = 'Save', del = false }){
     const crewNames = (() => { let l = []; try { l = CMStore.list().map(c => c.name).filter(Boolean); } catch (e) {} return l; })();
     const track = (k, max, n, kind, label) => `<div class="ct-pips ss-pips" data-strack="${k}" role="group" aria-label="${label}">${Array.from({ length: max }, (_, i) => `<button type="button" class="pip ${kind}${i < n ? ' on' : ''}" data-i="${i}" aria-label="${label} ${i + 1}${i < n ? ', marked' : ''}"${ro ? ' disabled' : ''}></button>`).join('')}</div>`;
     const art = s.photo || (shzDoc(s.model) ? KH_BLOB + shzDoc(s.model).asset : '');
-    const artStyle = !s.photo && shzDoc(s.model) ? ` style="${artStyleAttr(shzDoc(s.model))}"` : '';
+    const artStyle = s.photo ? pfAttr(s.photoFrame) : shzDoc(s.model) ? ` style="${artStyleAttr(shzDoc(s.model))}"` : '';
     const sysList = veh ? VSYS : SYSTEMS;
     const status = down ? `<div class="ss-alert bad" role="status"><b>${veh ? 'Wrecked' : 'Going down'}</b> The last Hull is marked. ${veh ? 'The driver chooses a crash move.' : 'The pilot chooses a ship death move.'} <a class="xref" href="#${veh ? 'ground-vehicles' : 'ship-death-moves'}">${veh ? 'Ground Vehicles' : 'Ship death moves'}</a></div>`
       : s.crit.length ? `<div class="ss-alert warn" role="status"><b>${veh ? 'Breakdown' : 'Systems failing'}</b> ${esc(s.crit.join(', '))} ${s.crit.length === 1 ? 'is' : 'are'} down. Patch Up during a rest to fix ${s.crit.length === 1 ? 'it' : 'them'}.</div>`
@@ -13311,7 +13482,7 @@ function khForm({ title, fields, data = {}, ok = 'Save', del = false }){
           <div class="ss-pic">
             ${art ? `<button type="button" class="cm-portrait ss-portrait" id="shPhotoZoom" aria-label="Enlarge the picture"><img src="${art}" alt="${esc(s.name || s.model)}"${artStyle}></button>`
               : `<div class="cm-portrait ss-portrait ss-noart">${shzIco(SHZ_SCALE[s.scale] ? s.scale : (veh ? 'Vehicle' : 'Freighter'))}<small>No picture yet</small></div>`}
-            ${ro ? '' : `<div class="ss-picbtns"><label class="btn">${s.photo ? 'Replace picture' : 'Add a picture'}<input type="file" id="shPhoto" accept="image/png,image/jpeg,image/webp" hidden></label>${s.photo ? '<button type="button" class="btn" id="shPhotoDel">Remove</button>' : ''}</div>`}
+            ${ro ? '' : `<div class="ss-picbtns"><label class="btn">${s.photo ? 'Replace picture' : 'Add a picture'}<input type="file" id="shPhoto" accept="image/png,image/jpeg,image/webp" hidden></label>${s.photo ? '<button type="button" class="btn" id="shPhotoFrame">Adjust</button><button type="button" class="btn" id="shPhotoDel">Remove</button>' : ''}</div>`}
           </div>
           <div class="cm-hero-main">
             <div class="cm-id">
@@ -13430,7 +13601,9 @@ function khForm({ title, fields, data = {}, ok = 'Save', del = false }){
       const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
       c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
       let q = .82, url = c.toDataURL('image/jpeg', q); while (url.length > 180000 && q > .4) { q -= .1; url = c.toDataURL('image/jpeg', q); }
-      shz.photo = url; render();
+      const fr = await pfOpen({ src: url, aspect: 4 / 3, title: 'Frame your ship', ok: 'Use this picture' });
+      if (!fr) return;
+      shz.photo = url; shz.photoFrame = fr; render();
     } catch (er) { toast('That image couldn’t be loaded.'); }
   });
   root.addEventListener('click', async e => {
@@ -13438,7 +13611,12 @@ function khForm({ title, fields, data = {}, ok = 'Save', del = false }){
     const b = e.target.closest('button'); if (!b) return; const s = ships[cur];
     if (b.id === 'shAddToggle') { shzStart(); return; }
     if (b.id === 'shPhotoZoom') { zoom(b.querySelector('img')); return; }
-    if (b.id === 'shPhotoDel') { if (ships[cur] && !KHStore.readOnly) { saveSoon(cur, { photo: '' }); render(); } return; }
+    if (b.id === 'shPhotoFrame') {
+      if (s && s.photo && !KHStore.readOnly) pfOpen({ src: s.photo, frame: s.photoFrame, aspect: pfAspect('#shPhotoZoom', 4 / 3), title: 'Frame your ship' })
+        .then(fr => { if (fr) { saveSoon(cur, { photoFrame: fr }); render(); } });
+      return;
+    }
+    if (b.id === 'shPhotoDel') { if (ships[cur] && !KHStore.readOnly) { saveSoon(cur, { photo: '', photoFrame: null }); render(); } return; }
     if (b.id === 'shCreate') {
       const m = MODELS[+$('#shModel').value]; const id = KHStore.newId('s'); const data = { ...fromModel(m), name: $('#shName').value.trim() };
       try { await KHStore.set('ships', id, data); ships[id] = data; cur = id; try { localStorage.setItem('kh-ship-cur', id); } catch (er) {} render(); toast(`${data.name || data.model} added.`); } catch (er) { toast('The ship didn’t save.'); }
@@ -13490,7 +13668,9 @@ function khForm({ title, fields, data = {}, ok = 'Save', del = false }){
         c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
         let q = .82, url = c.toDataURL('image/jpeg', q);
         while (url.length > 180000 && q > .4) { q -= .1; url = c.toDataURL('image/jpeg', q); }
-        saveSoon(cur, { photo: url }); render(); toast('Ship image loaded.');
+        const fr = await pfOpen({ src: url, aspect: pfAspect('#shPhotoZoom', 4 / 3), title: 'Frame your ship', ok: 'Use this picture' });
+        if (!fr) return;
+        saveSoon(cur, { photo: url, photoFrame: fr }); render(); toast('Ship image loaded.');
       } catch (er) { toast('That image couldn’t be loaded.'); }
       return;
     }
@@ -14090,5 +14270,10 @@ if (window.KH_BAKED) {
   });
 })();
 </script>
-</body>
+<script>
+/* tablet sidebar: pause the starfield while the sidebar scrolls, so the tablet isn't redrawing both */
+(function(){var mq=matchMedia('(min-width:861px) and (hover:none) and (pointer:coarse)'),side=document.getElementById('side'),t;
+if(!side)return;side.addEventListener('scroll',function(){if(!mq.matches)return;document.body.classList.add('side-scrolling');
+clearTimeout(t);t=setTimeout(function(){document.body.classList.remove('side-scrolling')},300)},{passive:true});})();
+</script></body>
 </html>
