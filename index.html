@@ -11064,6 +11064,7 @@ async function cmFonts(){
     await Promise.all([`800 40px ${IC_FONT}`, `700 30px ${IC_FONT}`, `600 30px ${IC_FONT}`, `400 30px ${IC_BODY}`, `700 30px ${IC_BODY}`, `italic 400 30px ${IC_BODY}`,
       '30px "Aurebesh Canon Tech"', '30px "Rogue AF"', '34px "Prime Jedi"'].map(f => document.fonts.load(f)));
     await khLogoReady(); try { await document.fonts.load('700 60px "Serif Gothic"'); } catch (e) {}
+    await cmSheetAssets();
     if (CM.ch && CM.ch.photo && (!cmPhotoImg || cmPhotoImg.src !== CM.ch.photo)) {
       cmPhotoImg = new Image(); await new Promise(r => { cmPhotoImg.onload = r; cmPhotoImg.onerror = r; cmPhotoImg.src = CM.ch.photo; });
     }
@@ -11122,286 +11123,180 @@ function cmField(x, label, val, X, Y, w, vs = 52){
   if (val) { x.font = F(700, vs); let t = val; while (x.measureText(t).width > w - 10 && t.length > 3) t = t.slice(0, -2) + '…'; x.fillText(t, X + 4, Y + vs + 8); }
 }
 
-function cmSheet(ch, page, withMarks){
+/* ---------- the printed character sheet (print/character-sheet in the source repo) ----------
+   The print build exports the blank pages (sheet/front.png, back.png and their -print versions for the
+   printer-friendly mode) and fields.json, the spots its PDF form fields use. This draws the blank page and
+   writes the character into those same spots, so the site and the printed PDFs share one design. */
+const CMS = { img: {}, map: null };
+async function cmSheetAssets(){
+  if (!CMS.map) CMS.map = await fetch('sheet/fields.json').then(r => r.json()).catch(() => null);
+  await Promise.all(['front', 'back', 'front-print', 'back-print'].map(n => CMS.img[n] ? null : new Promise(res => {
+    const im = new Image(); im.onload = () => { CMS.img[n] = im; res(); }; im.onerror = res; im.src = `sheet/${n}.png`;
+  })));
+}
+function cmSheet(ch, page, withMarks, ink){
+  const c = document.createElement('canvas'); c.width = CM_W; c.height = CM_H;
+  const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, CM_W, CM_H);
+  const bg = CMS.img[(page === 1 ? 'front' : 'back') + (ink ? '-print' : '')];
+  if (bg) x.drawImage(bg, 0, 0, CM_W, CM_H);
+  if (!CMS.map) return c;
+  const INK = '#141414', B = ch.blank || '';   // 'class': one class printed; 'any': fully blank
   const d = cmDerive(ch);
-  const [c, x] = cmCtx();
-  const M = CM_M, IW = CM_W - M * 2;
-  const B = ch.blank || '';   // 'class': a class's blank sheet; 'any': fully blank
+  const fields = CMS.map[page - 1], by = {};
+  fields.forEach(f => { by[f.name] = f; });
+  const fld = (n, i = 1) => by[i > 1 ? `${n} ${i}` : n];
+  const sg = n => (n < 0 ? '−' : '+') + Math.abs(n);
+  x.save(); x.scale(CM_W / 816, CM_H / 1056);   // the sheet's own units: CSS px at 96 dpi
+  x.textBaseline = 'alphabetic'; x.fillStyle = INK; x.strokeStyle = INK;
+
+  // one line of text in a field: shrunk to fit, centred when the field is a number box
+  const put = (f, t, o = {}) => {
+    if (!f || t === undefined || t === null || t === '') return;
+    t = String(t);
+    const center = o.center || f.align === 'center', big = f.size && f.size > 12;
+    let size = o.size || (big ? f.size : Math.min(11, f.h * .62)), font;
+    const mk = () => { font = big ? `700 ${size}px ${IC_FONT}` : `500 ${size}px ${IC_BODY}`; x.font = font; };
+    mk(); while (x.measureText(t).width > f.w - 4 && size > 6) { size -= .5; mk(); }
+    while (x.measureText(t).width > f.w - 4 && t.length > 2) t = t.slice(0, -2) + '…';
+    const tw = x.measureText(t).width, X = center ? f.x + (f.w - tw) / 2 : f.x + 2;
+    const Y = center ? f.y + f.h / 2 + size * .36 : f.y + f.h - 4;
+    x.fillStyle = INK; x.fillText(t, X, Y);
+  };
+  // feature text in a box: bold names, wrapped, shrunk until it fits
+  const runs = (size, list) => list.map(ft => [{ text: ft.name + ': ', font: `700 ${size}px ${IC_BODY}` }, { text: ft.text, font: `400 ${size}px ${IC_BODY}` }]);
+  const feats = (f, list) => {
+    if (!f || !list.length) return;
+    let size = 9, lines, lh;
+    for (; size >= 5; size -= .25) {
+      lh = size * 1.25; lines = [];
+      runs(size, list).forEach((it, i) => { if (i) lines.push(null); lines.push(...icWrap(x, it, f.w - 2)); });
+      const h = lines.reduce((a, l) => a + (l ? lh : lh * .45), 0);
+      if (h <= f.h) break;
+    }
+    let y = f.y + size;
+    lines.forEach(l => { if (!l) { y += lh * .45; return; } icDrawLine(x, l, f.x + 1, y); y += lh; });
+  };
+
+  // marks: fill a circle, a Hope diamond, a cut-corner armor slot, or tick a box
+  const dot = f => { if (!f) return; x.beginPath(); x.arc(f.x + f.w / 2, f.y + f.h / 2, Math.min(f.w, f.h) / 2 - 1, 0, Math.PI * 2); x.fillStyle = INK; x.fill(); };
+  const diamond = f => { if (!f) return; const cx = f.x + f.w / 2, cy = f.y + f.h / 2, r = Math.min(f.w, f.h) / 2 - 2; x.beginPath(); x.moveTo(cx, cy - r); x.lineTo(cx + r, cy); x.lineTo(cx, cy + r); x.lineTo(cx - r, cy); x.closePath(); x.fillStyle = INK; x.fill(); };
+  const slotPath = f => { const cx = f.x + 6, cy = f.y + 7; x.beginPath(); [[-3, -7], [6, -7], [6, 3], [3, 7], [-6, 7], [-6, -3]].forEach(([a, b], i) => i ? x.lineTo(cx + a, cy + b) : x.moveTo(cx + a, cy + b)); x.closePath(); };
+  const tick = f => { if (!f) return; const s = Math.min(f.w, f.h); x.save(); x.lineWidth = 1.6; x.lineCap = 'round'; x.lineJoin = 'round'; x.beginPath(); x.moveTo(f.x + s * .2, f.y + s * .55); x.lineTo(f.x + s * .42, f.y + s * .78); x.lineTo(f.x + s * .85, f.y + s * .18); x.stroke(); x.restore(); };
+  const cross = f => { if (!f) return; x.save(); x.lineWidth = 1.2; x.beginPath(); x.moveTo(f.x - 1, f.y + f.h + 1); x.lineTo(f.x + f.w + 1, f.y - 1); x.stroke(); x.restore(); };
+  // a slot you have: redraw its dashed outline solid
+  const solidCircle = f => { if (!f) return; const r = Math.min(f.w, f.h) / 2 - .8; x.beginPath(); x.arc(f.x + f.w / 2, f.y + f.h / 2, r + .9, 0, Math.PI * 2); x.fillStyle = page === 1 && !ink ? '#ededed' : '#fff'; x.fill(); x.beginPath(); x.arc(f.x + f.w / 2, f.y + f.h / 2, r, 0, Math.PI * 2); x.fillStyle = '#fff'; x.fill(); x.lineWidth = 1.6; x.strokeStyle = INK; x.stroke(); };
+  const solidSlot = f => { if (!f) return; slotPath(f); x.fillStyle = '#fff'; x.lineWidth = 2.6; x.strokeStyle = '#fff'; x.stroke(); x.fill(); x.lineWidth = 1.3; x.strokeStyle = INK; x.stroke(); };
+
   const m = withMarks ? ch.marks : { hp: 0, stress: 0, hope: B ? 0 : 2, armor: 0 };
   if (page === 1) {
-    // ---------- header: logo and name on top, identity fields below, portrait at the right ----------
-    let y = M + 10;
-    const PW = 470, PH = 480, px = CM_W - M - PW, LW = px - 50 - M;
-    // portrait: the photo in grayscale, or an empty frame to draw in
-    cmBox(x, px, y, PW, PH, 18, 4);
-    if (cmPhotoImg && cmPhotoImg.src === ch.photo && cmPhotoImg.complete && cmPhotoImg.naturalWidth) {
-      const fw = PW - 16, fh = PH - 16;
-      x.save(); icRound(x, px + 8, y + 8, fw, fh, 12); x.clip(); x.filter = 'grayscale(1) contrast(1.08)';
-      pfDraw(x, cmPhotoImg, px + 8, y + 8, fw, fh, ch.photoFrame);
-      x.restore(); x.filter = 'none';
-    } else { cmLabel(x, 'Portrait', px + 28, y + 46, 24); }
-    // logo, top left
-    const lw = 640, lh = lw * 138 / 1388;
-    khLogo(x, M, y + 6, lw, lh);
-    x.font = '26px "Aurebesh Canon Tech"'; x.fillText('CHARACTER SHEET', M + 4, y + lh + 52);
-    // name and player, beside the logo
-    const nx = M + lw + 70, nw = M + LW - nx;
-    cmLabel(x, 'Name', nx, y + 26, 24);
-    {
-      const pv = (ch.player || '').trim(); x.font = F(600, 30);
-      let pt = pv; while (pt && x.measureText(pt).width > 360) pt = pt.slice(0, -2) + '…';
-      const vw = pv ? x.measureText(pt).width : 320, vx = nx + nw - vw;
-      x.font = F(700, 22); const lw2 = x.measureText('PLAYER').width;
-      cmLabel(x, 'Player', vx - lw2 - 14, y + 26, 22);
-      if (pv) { x.font = F(600, 30); x.fillText(pt, vx, y + 26); } else cmHr(x, vx, y + 30, vw, 2);
+    // slots you have: Hit Points (the blank shows 5), Stress (6), armor slots (none)
+    const hp = B === 'any' ? 5 : d.hp, st = B === 'any' ? 6 : d.stress, armor = B ? 0 : d.armorScore;
+    for (let i = 6; i <= hp; i++) solidCircle(fld('Hit Points slot', i));
+    for (let i = 7; i <= st; i++) solidCircle(fld('Stress slot', i));
+    for (let i = 1; i <= Math.min(12, armor); i++) solidSlot(by[`Armor slot ${i}`]);
+    for (let i = 1; i <= Math.min(m.hp, hp); i++) dot(fld('Hit Points slot', i));
+    for (let i = 1; i <= Math.min(m.stress, st); i++) dot(fld('Stress slot', i));
+    for (let i = 1; i <= Math.min(m.armor || 0, armor); i++) { const f = by[`Armor slot ${i}`]; if (f) { slotPath(f); x.fillStyle = INK; x.fill(); } }
+    for (let i = 1; i <= Math.min(m.hope, d.hopeMax); i++) diamond(fld('Hope', i));
+    if (withMarks) {
+      const cr = ch.credits || {};
+      for (let i = 1; i <= Math.min(9, cr.handfuls || 0); i++) dot(fld('Handfuls', i));
+      for (let i = 1; i <= Math.min(9, cr.bags || 0); i++) dot(fld('Bags', i));
+      if (cr.chests) tick(fld('Chest'));
     }
-    x.font = `700 84px "Serif Gothic", ${IC_FONT}`; let nm = (ch.name || '').toUpperCase(); while (x.measureText(nm).width > nw && nm.length > 3) nm = nm.slice(0, -2) + '…';
-    x.fillText(nm, nx, y + 118); cmHr(x, nx, y + 138, nw, 4);
-    if (ch.name) { const pj = ch.classId === 'force-adept'; x.font = pj ? '30px "Prime Jedi"' : '24px "Aurebesh Canon Tech"'; x.fillText(pj ? ch.name : ch.name.toUpperCase(), nx, y + 178); }
-    // identity: two roomy rows to write in, filling the space left of the portrait
-    const rowA = [['Level', B ? '' : String(d.L), .14], ['Class', B === 'any' ? '' : d.cls.name, .43], ['Subclass', !B && d.sub ? d.sub.name : '', .43]];
-    const rowB = [['Ancestry', d.ancestryLabel, .55], ['Community', ch.community, .45]];
-    const fieldRow = (row, Y) => { let cx = M; row.forEach(([l, v, f]) => { const w = LW * f - 36; cmField(x, l, v, cx, Y, w, 56); cx += LW * f; }); };
-    fieldRow(rowA, y + 228);
-    fieldRow(rowB, y + 228 + 140);
-    y += PH + 40;
-
-    // ---------- traits ----------
-    const tg = 26, tw = (IW - tg * 5) / 6, th = 220;
-    TRAITS.forEach((t, i) => {
-      const X = M + i * (tw + tg);
-      cmBox(x, X, y, tw, th, 22, 4);
-      x.font = F(800, 34); const lab = t.toUpperCase(); x.fillText(lab, X + (tw - x.measureText(lab).width) / 2, y + 50);
-      const v = B ? '' : sgn(+d.traits[t] || 0); x.font = F(800, 92); x.fillText(v, X + (tw - x.measureText(v).width) / 2, y + 148);
-      x.font = F(500, 21); const vb = TRAIT_VERBS[t]; x.fillText(vb, X + (tw - x.measureText(vb).width) / 2, y + 194);
-      x.beginPath(); x.arc(X + tw - 30, y + 30, 13, 0, Math.PI * 2); x.lineWidth = 3; x.stroke(); if (d.marked.has(t)) x.fill();
-    });
-    y += th + 36;
-
-    // ---------- defense: evasion, armor, thresholds (one compact row) ----------
-    const bh = 176, ew = 300, aw = 640, gw = IW - ew - aw - 52;
-    cmBox(x, M, y, ew, bh); cmLabel(x, 'Evasion', M + 28, y + 46, 28);
-    x.font = F(800, 100); const ev = B === 'any' ? '' : String(d.evasion); x.fillText(ev, M + (ew - x.measureText(ev).width) / 2, y + 152);
-    const ax = M + ew + 26; cmBox(x, ax, y, aw, bh); cmLabel(x, 'Armor', ax + 28, y + 46, 28);
-    x.lineWidth = 3; icRound(x, ax + 28, y + 64, 130, 92, 12); x.stroke();
-    if (!B || d.armorScore) { x.font = F(800, 66); const as = B === 'any' ? '' : String(d.armorScore || ''); x.fillText(as, ax + 28 + (130 - x.measureText(as).width) / 2, y + 134); }
-    cmLabel(x, 'Slots', ax + 196, y + 44, 22);
-    cmPips(x, B ? 12 : Math.max(d.armorScore, 0), m.armor, ax + 196, y + 66, ax + aw - 20, 'square', 19, 52);
-    const gx = ax + aw + 26; cmBox(x, gx, y, gw, bh);
-    cmLabel(x, 'Damage thresholds', gx + 28, y + 46, 28);
-    // MINOR [major] MAJOR [severe] SEVERE, all on one line
-    const sy = y + 70, sh = 86, segw = (gw - 56) / 5;
-    const seg = (i, top, sub, val) => {
-      const X = gx + 28 + i * segw;
-      if (val !== undefined) { cmBox(x, X + 8, sy, segw - 16, sh, 14, 4); x.font = F(800, 58); const t = val == null ? '' : String(val); x.fillText(t, X + (segw - x.measureText(t).width) / 2, sy + 64); }
-      else { x.font = F(800, 30); x.fillText(top, X + (segw - x.measureText(top).width) / 2, sy + 38); x.font = F(500, 21); x.fillText(sub, X + (segw - x.measureText(sub).width) / 2, sy + 70); }
-    };
-    seg(0, 'MINOR', 'Mark 1 HP'); seg(1, '', '', d.major); seg(2, 'MAJOR', 'Mark 2 HP'); seg(3, '', '', d.severe); seg(4, 'SEVERE', 'Mark 3 HP');
-    y += bh + 46;
-
-    // ---------- trackers ----------
-    const half = (IW - 60) / 2;
-    cmLabel(x, 'Hit Points', M, y + 40, 32); cmPips(x, 12, Math.min(m.hp, d.hp), M + 300, y, M + half, 'square', 24, 66, B === 'any' ? 12 : d.hp);
-    cmLabel(x, 'Hope', M + half + 60, y + 40, 32); cmPips(x, d.hopeMax, m.hope, M + half + 60 + 200, y - 2, CM_W - M, 'diamond', 30, 84);
-    y += 90;
-    cmLabel(x, 'Stress', M, y + 40, 32); cmPips(x, 12, Math.min(m.stress, d.stress), M + 300, y, M + half, 'square', 24, 66, d.stress);
-    cmLabel(x, 'Proficiency', M + half + 60, y + 40, 32); cmPips(x, 6, B ? 0 : d.prof, M + half + 60 + 270, y + 2, CM_W - M, 'circle', 22, 62);
-    y += 76;
-    x.font = F(500, 22); x.fillText('Dashed boxes are slots you haven’t unlocked yet. A filled circle on a trait means it’s marked until your next tier achievement clears it.', M, y + 18);
-    y += 64;
-
-    // ---------- two columns ----------
-    const colGap = 70, lw2 = (IW - colGap) * .47, rw = IW - colGap - lw2, rx = M + lw2 + colGap;
-    const top = y, bottom = CM_H - M - 70;
-    // left: weapons, armor, experiences, inventory, credits
-    let ly = top + 30;
-    cmSection(x, 'Active weapons', M, ly, lw2); ly += 30;
-    x.font = F(500, 22); x.fillText(B ? 'Roll damage dice equal to your Proficiency' : `Proficiency ${d.prof}: roll ${d.prof} damage ${d.prof === 1 ? 'die' : 'dice'}`, M, ly + 10); ly += 20;
-    const wbox = (lab, w, slot) => {
-      const nick = w && cmNick(ch, slot, w.name), nn = nick && nick.nick;
-      cmBox(x, M, ly, lw2, 190, 16, 3);
-      const kbc = w && bladeType(w.name) && bladeType(w.name) !== 'dark' && KYBER.names[ch.blade] ? ` · ${KYBER.names[ch.blade]} kyber crystal` : '';
-      // the weapon's picture on the right: the player's own, a workbench lightsaber, or the site's
-      const pic = !B && w ? cmImgs[cmWeaponSrc(ch, slot, w)] : null, PA = pic ? 330 : 0;
-      if (pic) {
-        const bx = M + lw2 - PA - 14, by = ly + 14, bw = PA, bh = 162, saber = !!(((ch.gearArt || {})[slot] || {}).ls);
-        x.save(); icRound(x, bx, by, bw, bh, 10); x.clip();
-        if (saber) { x.fillStyle = '#141b25'; x.fillRect(bx, by, bw, bh); }
-        pfDraw(x, pic, bx + 8, by + 8, bw - 16, bh - 16, cmWeaponFrame(ch, slot, w), 'contain'); x.restore(); x.fillStyle = '#000';
-      }
-      const tw = lw2 - 48 - (PA ? PA + 20 : 0), clip = (t, f) => { x.font = f; while (x.measureText(t).width > tw && t.length > 3) t = t.slice(0, -2) + '…'; return t; };
-      cmLabel(x, clip(lab + kbc, F(700, 22)), M + 24, ly + 40, 22);
-      if (w) {
-        const t1 = clip(nn || w.name, F(800, 44)); x.fillText(t1, M + 24, ly + 92);
-        if (nn) { const nw = x.measureText(t1).width; const t2 = `(${w.name})`; x.font = F(600, 26); if (nw + 14 + x.measureText(t2).width <= tw) x.fillText(t2, M + 24 + nw + 14, ly + 92); }
-        x.fillText(clip(`${w.trait} · ${w.range} · ${w.damage}${w.burden ? ' · ' + w.burden : ''}`, F(600, 30)), M + 24, ly + 134);
-        if (w.feature && w.feature !== '—') x.fillText(clip('Feature: ' + w.feature, F(500, 24)), M + 24, ly + 170);
-      }
-      ly += 210;
-    };
-    wbox('Primary', d.prim, 'primary'); wbox('Secondary', d.sec, 'secondary');
-    cmSection(x, 'Active armor', M, ly + 34, lw2); ly += 56;
-    cmBox(x, M, ly, lw2, 130, 16, 3);
-    if (d.arm) {
-      x.font = F(800, 44); x.fillText(d.arm.name, M + 24, ly + 58);
-      x.font = F(600, 28); x.fillText(`Base thresholds ${d.arm.thr} · Base score ${d.arm.score}${d.arm.feature && d.arm.feature !== '—' ? ' · ' + d.arm.feature : ''}`, M + 24, ly + 104);
-    }
-    ly += 160;
-    cmSection(x, 'Experiences', M, ly + 30, lw2); ly += 44;
-    const exps = ch.experiences.slice(0, Math.max(5, d.expSlots));
-    for (let i = 0; i < 5; i++) {
-      ly += 62; cmHr(x, M, ly, lw2 - 110, 2.5);
-      const e = exps[i];
-      if (e && e.name) { x.font = F(600, 36); x.fillText(e.name, M + 6, ly - 12); }
-      cmBox(x, M + lw2 - 90, ly - 50, 90, 58, 10, 3);
-      if (e && e.name) { x.font = F(800, 36); const t = '+' + (2 + (d.expBonus[i] || 0)); x.fillText(t, M + lw2 - 45 - x.measureText(t).width / 2, ly - 8); }
-    }
-    ly += 30;
-    cmSection(x, 'Inventory', M, ly + 30, lw2); ly += 40;
-    const inv = cmInvLines(ch);
-    const invLines = Math.max(6, Math.floor((bottom - 250 - ly) / 54));
-    for (let i = 0; i < invLines; i++) { ly += 54; cmHr(x, M, ly, lw2, 2); if (inv[i]) { x.font = F(500, 30, IC_BODY); x.fillText(inv[i], M + 6, ly - 12); } }
-    ly += 40;
-    cmSection(x, 'Credits', M, ly + 30, lw2); ly += 56;
-    const cr = withMarks ? ch.credits : { handfuls: 0, bags: 0, chests: 0 };
-    cmLabel(x, 'Handfuls', M, ly + 34, 22); cmPips(x, 9, cr.handfuls || 0, M + 160, ly + 8, M + lw2, 'circle', 15, 40);
-    cmLabel(x, 'Bags', M, ly + 94, 22); cmPips(x, 9, cr.bags || 0, M + 160, ly + 68, M + lw2, 'circle', 15, 40);
-    cmLabel(x, 'Chest', M + lw2 - 200, ly + 154, 22); cmPips(x, 1, cr.chests || 0, M + lw2 - 54, ly + 126, M + lw2, 'square', 20, 40);
-    x.font = F(500, 20); x.fillText('Handful 100 cr · Bag 1,000 cr · Chest 10,000 cr', M, ly + 154);
-
-    // right: features
-    let ry = top + 30;
-    const feats = [];
     if (B !== 'any') {
-      if (d.cls.hope) feats.push(['Hope feature', [d.cls.hope]]);
-      feats.push(['Class features', d.cls.features]);
-    }
-    if (B === 'class') {
-      // both subclasses' foundations; the player crosses out the one they don't take
-      d.cls.subclasses.forEach(sc => feats.push([`Subclass: ${sc.name}${sc.spellcast ? ` · Focus: ${sc.spellcast}` : ''}`, sc.foundation || [], true]));
-    } else if (!B && d.sub) {
-      const subFeats = [...(d.sub.foundation || []), ...(d.subUps >= 1 ? d.sub.specialization || [] : []), ...(d.subUps >= 2 ? d.sub.mastery || [] : [])];
-      feats.push([`${d.sub.name} · ${d.subStage}${d.sub.spellcast ? ` · Focus: ${d.sub.spellcast}` : ''}`, subFeats]);
-    }
-    if (!B && d.mc && d.mc.cls) {
-      const mf = d.mc.cls.features[+d.mc.feature || 0], ms = d.mc.cls.subclasses[+d.mc.subclass || 0];
-      feats.push([`Multiclass: ${d.mc.cls.name}${ms ? ' · ' + ms.name : ''}${ms && ms.spellcast ? ` · Focus: ${ms.spellcast}` : ''}`, [mf, ...((ms && ms.foundation) || [])].filter(Boolean)]);
+      put(fld('Class - subclass'), B === 'class' ? d.cls.name : `${d.cls.name}${d.sub ? ' · ' + d.sub.name : ''}`);
+      put(fld('Evasion'), d.evasion);
+      if (d.cls.hope) {
+        const hf = icWrap(x, runs(8.5, [d.cls.hope])[0], by['Hope feature'].w - 2);
+        // two lines: if it runs longer, shrink until it fits on them
+        let size = 8.5, l = hf;
+        while (l.length > 2 && size > 5.5) { size -= .25; l = icWrap(x, runs(size, [d.cls.hope])[0], by['Hope feature'].w - 2); }
+        [by['Hope feature'], by['Hope feature line 2']].forEach((f, i) => { if (l[i] && f) icDrawLine(x, l[i], f.x + 2, f.y + f.h - 4); });
+      }
     }
     if (!B) {
-      feats.push(['Ancestry: ' + d.ancestryLabel, d.ancFeatures]);
-      if (d.com) feats.push(['Community: ' + ch.community, d.com.features]);
-    }
-    const avail = bottom - ry;
-    // shared type size across all feature sections so the column reads evenly
-    let size = 34, layout = null;
-    const fit = list => {
-      for (size = 34; size >= 18; size--) {
-        const lh = Math.round(size * 1.27), pg = Math.round(size * .5);
-        let total = 0;
-        const parts = list.map(([t, l]) => {
-          const blocks = l.map(f => icWrap(x, [{ text: f.name + ': ', font: F(700, size, IC_BODY) }, { text: f.text, font: F(400, size, IC_BODY) }], rw));
-          const h = 70 + blocks.reduce((a, b, i) => a + b.length * lh + (i ? pg : 0), 0) + 26;
-          total += h; return { t, blocks, h, lh, pg };
-        });
-        // a blank class sheet keeps room for writing in ancestry and community features
-        if (total <= avail - (B === 'class' ? 520 : 0)) return parts;
+      put(fld('Name'), ch.name);
+      put(fld('Ancestry'), d.ancestryLabel); put(fld('Community'), ch.community);
+      put(fld('Level'), d.L);
+      put(fld('Armor score'), d.armorScore || '');
+      TRAITS.forEach(t => { put(fld(cap1(t)), sg(+d.traits[t] || 0)); if (d.marked.has(t)) dot(fld(cap1(t) + ' marked')); });
+      put(fld('Major threshold'), d.major); put(fld('Severe threshold'), d.severe);
+      for (let i = 1; i <= Math.min(6, d.prof); i++) dot(fld('Proficiency', i));
+      [['Primary', d.prim, 'primary'], ['Secondary', d.sec, 'secondary']].forEach(([k, w, slot]) => {
+        if (!w) return;
+        const nick = cmNick(ch, slot, w.name);
+        put(fld(`${k} Name`), nick && nick.nick ? `${nick.nick} (${w.name})` : w.name);
+        put(fld(`${k} Trait - range`), `${w.trait} · ${w.range}`);
+        put(fld(`${k} Damage - phy / frc`), w.damage);
+        if (w.feature && w.feature !== '—') put(fld(`${k} Feature`), w.feature);
+      });
+      if (d.arm) {
+        put(fld('Armor Name'), d.arm.name); put(fld('Armor Base thresholds'), d.arm.thr); put(fld('Armor Base score'), d.arm.score);
+        if (d.arm.feature && d.arm.feature !== '—') put(fld('Armor Feature'), d.arm.feature);
       }
-      return null;
-    };
-    layout = fit(feats);
-    if (!layout && B === 'class') layout = fit(feats.filter(f => !f[2]));
-    if (!layout) layout = [];
-    layout.forEach(p => {
-      cmSection(x, p.t, rx, ry + 30, rw); let yy = ry + 52;
-      p.blocks.forEach((b, i) => { if (i) yy += p.pg; b.forEach(l => { yy += p.lh; icDrawLine(x, l, rx, yy - Math.round(size * .27)); }); });
-      ry += p.h;
-    });
-    // a blank sheet gets ruled space for the features a player writes in
-    const ruled = (t, n) => { cmSection(x, t, rx, ry + 40, rw); for (let k = 0; k < n; k++) cmHr(x, rx, ry + 110 + k * 54, rw, 2); ry += 110 + n * 54; };
-    if (B === 'any') { ruled('Hope & class features', 10); ruled('Subclass features', 6); }
-    if (B) { ruled('Ancestry features', 3); ruled('Community feature', 2); }
-    // whatever room is left in the column becomes lined notes
-    if (bottom - ry > 200) {
-      cmSection(x, 'Conditions & notes', rx, ry + 40, rw);
-      for (let yy = ry + 110; yy < bottom - 10; yy += 54) cmHr(x, rx, yy, rw, 2);
+      ch.experiences.slice(0, 5).forEach((e, i) => { if (e && e.name) { put(fld('Experience', i + 1), e.name); put(fld('Experience bonus', i + 1), 2 + (d.expBonus[i] || 0)); } });
+      // inventory: one item per line; anything that doesn't fit runs on in the last line
+      const inv = cmInvLines(ch), n = fields.filter(f => /^Inventory( \d+)?$/.test(f.name)).length;
+      inv.slice(0, n - 1).forEach((t, i) => put(fld('Inventory', i + 1), t));
+      if (inv.length >= n) put(fld('Inventory', n), inv.slice(n - 1).join(' · '));
     }
-
-    cmFooter(x, ch, 1);
+    // features: class (plus a multiclass), subclass, ancestry, community
+    if (B !== 'any') {
+      const cl = [...d.cls.features];
+      if (!B && d.mc && d.mc.cls) { const mf = d.mc.cls.features[+d.mc.feature || 0]; if (mf) cl.push({ ...mf, name: `${mf.name} (${d.mc.cls.name})` }); }
+      feats(by['Features Class'], cl);
+      if (B === 'class') feats(by['Features Subclass'], d.cls.subclasses.flatMap(sc => (sc.foundation || []).map(f => ({ ...f, name: `${sc.name}: ${f.name}` }))));
+      else {
+        const sub = [...(d.sub.foundation || []), ...(d.subUps >= 1 ? d.sub.specialization || [] : []), ...(d.subUps >= 2 ? d.sub.mastery || [] : [])];
+        if (d.mc && d.mc.cls) { const ms = d.mc.cls.subclasses[+d.mc.subclass || 0]; if (ms) sub.push(...(ms.foundation || []).map(f => ({ ...f, name: `${f.name} (${ms.name})` }))); }
+        feats(by['Features Subclass'], sub);
+        feats(by['Features Ancestry'], d.ancFeatures);
+        if (d.com) feats(by['Features Community'], d.com.features);
+      }
+    }
   } else {
-    // ---------- page 2: cards, background, connections ----------
-    let y = M + 10;
-    const lw = 620, lh = lw * 138 / 1388;
-    khLogo(x, M, y, lw, lh);
-    x.font = F(800, 64); const nm = ch.name || ''; x.fillText(nm, CM_W - M - x.measureText(nm).width, y + 56);
-    x.font = F(600, 28); const sub = B ? (B === 'class' ? d.cls.name : '') : `Level ${d.L} ${d.cls.name}${d.sub ? ' · ' + d.sub.name : ''}${ch.player ? ' · Player: ' + ch.player : ''}`; x.fillText(sub, CM_W - M - x.measureText(sub).width, y + 98);
-    y += 140; cmHr(x, M, y, IW, 5); y += 70;
-
-    // loadout: five card boxes
-    cmSection(x, 'Loadout · class cards (up to 5)', M, y, IW); y += 34;
-    const gw = 34, cw = (IW - gw) / 2, chh = 330;
-    const cards = d.loadoutCards;
-    for (let i = 0; i < 6; i++) {
-      const X = M + (i % 2) * (cw + gw), Y = y + Math.floor(i / 2) * (chh + 26);
-      if (i === 5) { // the sixth tile is a recall-cost and vault key
-        cmBox(x, X, Y, cw, chh, 18, 3);
-        cmLabel(x, 'Vault', X + 26, Y + 50, 26);
-        x.font = F(500, 24); x.fillText('Cards you know but haven’t loaded.', X + 26, Y + 88);
-        for (let k = 1; k <= 4; k++) {
-          cmHr(x, X + 26, Y + 92 + k * 54, cw - 52, 2);
-          const v = d.vaultCards.slice((k - 1) * 2, k * 2).map(c => `${c.name} (L${c.level})`).join(' · ');
-          if (v) { x.font = F(500, 26, IC_BODY); x.fillText(v, X + 30, Y + 80 + k * 54); }
-        }
-        continue;
+    if (!B) {
+      put(fld('Name (back)'), ch.name); put(fld('Player'), ch.player);
+      // portrait: the photo in grayscale
+      const pf = by['Portrait'];
+      if (pf && cmPhotoImg && cmPhotoImg.src === ch.photo && cmPhotoImg.complete && cmPhotoImg.naturalWidth) {
+        x.save(); x.beginPath(); x.rect(pf.x, pf.y, pf.w, pf.h); x.clip(); x.filter = 'grayscale(1) contrast(1.08)';
+        pfDraw(x, cmPhotoImg, pf.x, pf.y, pf.w, pf.h, ch.photoFrame); x.restore(); x.filter = 'none';
       }
-      cmBox(x, X, Y, cw, chh, 18, 3);
-      const cd = cards[i];
-      if (!cd) { x.font = '120px "Rogue AF"'; x.globalAlpha = .07; x.fillText('8', X + cw / 2 - 60, Y + chh / 2 + 44); x.globalAlpha = 1; continue; }
-      x.font = F(800, 44); x.fillText(cd.name, X + 26, Y + 62);
-      x.font = F(600, 24); x.fillText(`Level ${cd.level} ${cd.deck || d.cls.name} ${cd.type} · Recall ${cd.recall}`, X + 26, Y + 100);
-      cmFit(x, s => [[{ text: cd.text, font: F(400, s, IC_BODY) }]], X + 26, Y + 112, cw - 52, chh - 130, 28, 16);
+      // card vault: loadout first, then the vault
+      [...d.loadoutCards.map(c => [c, true]), ...d.vaultCards.map(c => [c, false])].slice(0, 14).forEach(([cd, on], i) => {
+        if (on) tick(fld(`Card ${i + 1} in loadout`));
+        put(fld(`Card ${i + 1} card`), cd.name); put(fld(`Card ${i + 1} level`), cd.level); put(fld(`Card ${i + 1} type`), cd.type); put(fld(`Card ${i + 1} recall`), cd.recall);
+      });
+      // level up: the slots this character has used, and the ones multiclassing crossed out
+      const u = cmUsage(ch, d.L), ROW = { traits: 'Increase two unmarked traits', hp: 'Add a Hit Point slot', stress: 'Add a Stress slot', exp: 'Increase two Experiences',
+        card: 'Take an additional class card', evasion: 'Increase your Evasion', prof: 'Increase your Proficiency', subclass: 'Take an upgraded subclass card', multiclass: 'Multiclass' };
+      [2, 3, 4].forEach(t => Object.entries(ROW).forEach(([type, label]) => {
+        const def = ADVM[type];
+        for (let n = 1; n <= def.slots; n++) {
+          const f = fld(`${label} tier ${t} slot ${n}`);
+          if (n <= (u.used[t][type] || 0)) tick(f); else if (u.crossed[t][type]) cross(f);
+        }
+      }));
+      [2, 5, 8].forEach(l => { if (d.L >= l) tick(fld(`Tier achievement Level ${l}`)); });
     }
-    y += 3 * (chh + 26) + 30;
-
-    // background questions
-    cmSection(x, 'Background', M, y, IW); y += 20;
-    (B === 'any' ? ['', '', ''] : d.cls.questions).forEach((q, i) => {
-      x.font = F(700, 28, IC_BODY); x.fillText(q, M, y + 44); if (!q) cmHr(x, M, y + 48, IW, 2); y += 50;
-      const a = ch.answers[i] || '';
-      const lines = icWrap(x, [{ text: a, font: F(400, 30, IC_BODY) }], IW);
-      for (let k = 0; k < 2; k++) { y += 52; cmHr(x, M, y, IW, 2); if (lines[k]) icDrawLine(x, lines[k], M + 4, y - 12); }
-      y += 14;
-    });
-    y += 30;
-    // look + personality side by side
-    const hw = (IW - 50) / 2;
-    cmSection(x, 'Look', M, y, hw); cmSection(x, 'Personality', M + hw + 50, y, hw);
-    const lookL = icWrap(x, [{ text: ch.look || '', font: F(400, 30, IC_BODY) }], hw), perL = icWrap(x, [{ text: ch.personality || '', font: F(400, 30, IC_BODY) }], hw);
-    for (let k = 0; k < 3; k++) { const yy = y + 20 + (k + 1) * 52; cmHr(x, M, yy, hw, 2); cmHr(x, M + hw + 50, yy, hw, 2); if (lookL[k]) icDrawLine(x, lookL[k], M + 4, yy - 12); if (perL[k]) icDrawLine(x, perL[k], M + hw + 54, yy - 12); }
-    y += 20 + 3 * 52 + 60;
-    // connections
-    cmSection(x, 'Connections', M, y, IW); y += 20;
-    (B === 'any' ? ['', '', ''] : d.cls.connections).forEach((q, i) => {
-      x.font = F(700, 26, IC_BODY); x.fillText(q, M, y + 40); if (!q) cmHr(x, M, y + 44, IW, 2); y += 44;
-      y += 50; cmHr(x, M, y, IW, 2);
-      if (ch.connections[i]) { x.font = F(400, 30, IC_BODY); let t = ch.connections[i]; while (x.measureText(t).width > IW && t.length > 3) t = t.slice(0, -2) + '…'; x.fillText(t, M + 4, y - 12); }
-      y += 8;
-    });
-    y += 40;
-    // notes fill the rest
-    const bottom = CM_H - M - 70;
-    cmSection(x, 'Notes', M, y, IW);
-    const notes = icWrap(x, [{ text: ch.notes || '', font: F(400, 30, IC_BODY) }], IW);
-    let k = 0;
-    for (let yy = y + 60; yy < bottom; yy += 52, k++) { cmHr(x, M, yy, IW, 2); if (withMarks && notes[k]) icDrawLine(x, notes[k], M + 4, yy - 12); }
-    cmFooter(x, ch, 2);
+    if (B !== 'any') {
+      const focus = [d.sub && d.sub.spellcast, !B && d.mc && d.mc.cls && (d.mc.cls.subclasses[+d.mc.subclass || 0] || {}).spellcast].filter(Boolean);
+      put(fld('Focus trait'), B === 'class' ? [...new Set(d.cls.subclasses.map(sc => sc.spellcast).filter(Boolean))].join(' or ') || '—' : focus.join(' or ') || '—');
+      [['Background', d.cls.questions, ch.answers], ['Connections', d.cls.connections, ch.connections]].forEach(([k, qs, as]) => (qs || []).slice(0, 3).forEach((q, i) => {
+        put(fld(`${k} ${i + 1} question`), q, { size: 7.5 });
+        if (B) return;
+        const a = (as || [])[i] || '', f1 = fld(`${k} ${i + 1} answer line 1`), f2 = fld(`${k} ${i + 1} answer line 2`);
+        if (!a || !f1) return;
+        const l = icWrap(x, [{ text: a, font: `400 10px ${IC_BODY}` }], f1.w - 4);
+        icDrawLine(x, l[0], f1.x + 2, f1.y + f1.h - 4);
+        if (l[1] && f2) { const rest = l.slice(1).map(w => w.map(p => p.text).join('')).join(' '); put(f2, rest); }
+      }));
+    }
   }
+  x.restore();
   return c;
-}
-function cmFooter(x, ch, page){
-  const y = CM_H - CM_M + 20;
-  x.font = '30px "Rogue AF"'; x.fillText('1 8 1', CM_W / 2 - 60, y - 2);
-  x.font = '26px "Aurebesh Canon Tech"'; x.fillText('KYBERHEART', CM_M, y);
-  x.font = F(600, 24); const t = `KYBERHEART · CHARACTER SHEET · PAGE ${page} OF 2`; x.fillText(t, CM_W - CM_M - x.measureText(t).width, y);
 }
 
 /* =====================================================================
@@ -11429,6 +11324,7 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
   <div id="cmSheet" class="cm-pane" hidden>
     <div class="sm-bar">
       <label class="eb-check"><input type="checkbox" id="cmMarks" checked> Include marked boxes and current Hope</label>
+      <label class="eb-check"><input type="checkbox" id="cmInk"> Printer-friendly (outlines instead of black fills)</label>
       <button type="button" class="btn sm-save" id="cmPng1" hidden>Page 1 PNG</button>
       <button type="button" class="btn sm-save" id="cmPng2" hidden>Page 2 PNG</button>
       <button type="button" class="btn primary sm-save" id="cmPdf" hidden>Download PDF</button>
@@ -13194,9 +13090,9 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
   CM.pages = [null, null];
   async function renderSheetPreview(){
     await cmFonts();
-    const marks = $('#cmMarks').checked;
+    const marks = $('#cmMarks').checked, ink = $('#cmInk').checked;
     for (const n of [1, 2]) {
-      const c = cmSheet(CM.ch, n, marks);
+      const c = cmSheet(CM.ch, n, marks, ink);
       const blob = await new Promise(r => c.toBlob(r, 'image/png'));
       if (CM.pages[n - 1] && CM.pages[n - 1].url) URL.revokeObjectURL(CM.pages[n - 1].url);
       CM.pages[n - 1] = { canvas: c, blob, url: URL.createObjectURL(blob) };
@@ -13204,6 +13100,7 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
     }
   }
   $('#cmMarks').onchange = renderSheetPreview;
+  $('#cmInk').onchange = renderSheetPreview;
   $('#cmPage1').onclick = e => zoom(e.target); $('#cmPage2').onclick = e => zoom(e.target);
   const fileBase = () => (CM.ch.name || 'kyberheart-character').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'character';
   async function offer(filename, data){
@@ -13574,10 +13471,11 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
   /* ---------- the page ---------- */
   const ITEMS = [
     { id: 'character', icon: 'D', title: 'Character Sheet', meta: 'Letter · 2 pages · black and white',
-      desc: 'A sheet to fill in by hand. Choose a class to print its Hope feature, class features, both subclasses’ foundation features, Hit Point slots, Evasion, background questions, and connections, or print it fully blank for any class.',
+      desc: 'A sheet to fill in by hand. Choose a class to print its Hope feature, class features, both subclasses’ foundation features, Hit Point slots, Evasion, Focus trait, background questions, and connections, or print it fully blank for any class. To type into it instead, download the fillable PDF: <a class="xref" href="sheet/kyberheart-character-sheet.pdf" download>regular</a> or <a class="xref" href="sheet/kyberheart-character-sheet-printer-friendly.pdf" download>printer-friendly</a>.',
       pick: { label: 'Class', options: [['', 'Any class (fully blank)'], ...CHARDATA.classes.map(cl => [cl.id, cl.name])] },
-      file: v => `kyberheart-character-sheet-${v ? slug(v) : 'blank'}`,
-      render: async v => { await fontsReady(); const ch = blankChar(v); return [cmSheet(ch, 1, false), cmSheet(ch, 2, false)]; } },
+      ink: true,
+      file: (v, st) => `kyberheart-character-sheet-${v ? slug(v) : 'blank'}${st && st.ink ? '-printer-friendly' : ''}`,
+      render: async (v, st) => { await fontsReady(); const ch = blankChar(v); return [cmSheet(ch, 1, false, st && st.ink), cmSheet(ch, 2, false, st && st.ink)]; } },
     { id: 'droid', title: 'Droid Companion Sheet', icon: '', meta: '4 × 6 index card · black and white', sheet: 'droid',
       desc: 'For a Mechanic’s droid or a Droid Pal. Print it blank, or pick a frame to fill in its Evasion, Stress, and Frame Feature. The rules are in <a class="xref" href="#droid-companions">Droid Companions</a>.' },
     { id: 'starship', title: 'Starship Sheet', icon: 'R', meta: '4 × 6 index card · black and white', sheet: 'ship',
@@ -13604,6 +13502,7 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
       ${it.sheet ? `<div class="dl-sm" data-sm="${it.sheet}"></div>` : `
       <div class="sm-bar">
         ${it.pick ? `<label>${esc(it.pick.label)} <select class="dl-pick">${it.pick.options.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></label>` : ''}
+        ${it.ink ? '<label class="eb-check"><input type="checkbox" class="dl-ink"> Printer-friendly</label>' : ''}
         <span class="dl-btns"><button type="button" class="btn primary dl-pdf" hidden>Download PDF</button><button type="button" class="btn dl-png" hidden>Download PNG</button></span>
       </div>
       <div class="sm-stage dl-stage"><p class="dl-wait">Drawing…</p></div>
@@ -13630,7 +13529,7 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
     const draw = async () => {
       const v = st.v; stage.classList.add('busy');
       let canvases = [];
-      try { canvases = await it.render(v); } catch (e) { stage.innerHTML = '<p class="dl-wait">This one couldn’t be drawn.</p>'; return; }
+      try { canvases = await it.render(v, st); } catch (e) { stage.innerHTML = '<p class="dl-wait">This one couldn’t be drawn.</p>'; return; }
       if (v !== st.v) return;
       st.pages.forEach(p => URL.revokeObjectURL(p.url));
       st.pages = await Promise.all(canvases.map(async c => { const blob = await blobOf(c); return { canvas: c, blob, url: URL.createObjectURL(blob) }; }));
@@ -13642,7 +13541,9 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
     };
     const pick = el.querySelector('.dl-pick');
     if (pick) pick.onchange = () => { st.v = pick.value; draw(); };
-    const base = () => it.file(st.v ? (CHARDATA.classes.find(c => c.id === st.v) || {}).name || st.v : '');
+    const inkBox = el.querySelector('.dl-ink');
+    if (inkBox) inkBox.onchange = () => { st.ink = inkBox.checked; draw(); };
+    const base = () => it.file(st.v ? (CHARDATA.classes.find(c => c.id === st.v) || {}).name || st.v : '', st);
     el.querySelector('.dl-png').onclick = async () => {
       if (!st.pages.length) return;
       for (let i = 0; i < st.pages.length; i++) await offer(`${base()}${st.pages.length > 1 ? `-page-${i + 1}` : ''}.png`, st.pages[i].blob);
