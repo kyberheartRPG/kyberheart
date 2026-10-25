@@ -8699,6 +8699,8 @@ ngFillRoles();
    fill-in circles, and shrinks the text until everything fits.
    ===================================================================== */
 const IC = { orient: 'landscape', style: 'badge', pf: false, data: null, blob: null, url: null, dl: undefined };
+const IC_BOOKS = { CW: 'The Clone Wars', RE: 'Reign of the Empire', AR: 'Age of Rebellion', HR: 'The High Republic', SQ: 'Rise of the Resistance',
+  NR: 'The New Republic', SV: 'Scum & Villainy', MA: 'Way of Mandalore', WF: 'Ways of the Force' };
 const IC_FONT = '"Barlow Semi Condensed","Arial Narrow","Helvetica Neue",Arial,sans-serif';
 const IC_BODY = '"Barlow","Helvetica Neue",Arial,sans-serif';
 
@@ -8860,8 +8862,11 @@ function icRead(sec){
   d.atk = grab(/ATK:\s*([^|]+)/);
   const atkLine = sl.find(s => /^ATK:/.test(s));
   if (atkLine) d.attack = atkLine.split('|').slice(1).map(s => s.trim()).join(' · ').replace(/:\s*·?\s*/, ' · ');
+  // the book it's from: an expansion's code on the section (data-book), else Core
+  d.book = IC_BOOKS[sec.dataset.book] || d.book || 'Core';
   d.tables = !!sec.querySelector('.card-body .tw');
   d.ship = sec.dataset.kind === 'ship';
+  d.env = sec.dataset.kind === 'environment';
   const tm = d.tier.match(/^Tier\s*(\d+)\s*(.*)$/i);
   d.tierNum = tm ? tm[1] : ''; d.role = tm ? tm[2].trim() : d.tier;
   d.droid = /droid|droideka|magnaguard|dark trooper|tri-fighter|hailfire|kx security/i.test(name);
@@ -8976,7 +8981,7 @@ function icRender(d, orient){
 
   // ----- footer (shared): source (when it fits) left, logo + book and kind right -----
   const footY = H - KH4.foot;
-  const srcInBody = !!d.source && !kh4Footer(ctx, pad, W - pad, footY, (d.book ? d.book + ' · ' : '') + (d.ship ? 'SHIP ADVERSARY' : 'ADVERSARY'), d.source && { text: d.source, font: `24px ${IC_FONT}` });
+  const srcInBody = !!d.source && !kh4Footer(ctx, pad, W - pad, footY, (d.book ? d.book + ' · ' : '') + (d.env ? 'ENVIRONMENT' : d.ship ? 'SHIP ADVERSARY' : 'ADVERSARY'), d.source && { text: d.source, font: `24px ${IC_FONT}` });
   ctx.fillStyle = '#000';
 
   // ----- body: motives, experience, description, features; shrink to fit -----
@@ -9138,7 +9143,7 @@ function icRenderBadge(d, orient){
   // ----- footer (shared): source (when it fits) left, logo + kind right -----
   const pad = land ? 46 : 40;
   const footY = H - KH4.foot;
-  const srcInBody = !!d.source && !kh4Footer(ctx, L + pad, R - pad, footY, (d.book ? d.book + ' · ' : '') + (d.ship ? 'SHIP ADVERSARY' : 'ADVERSARY'), d.source && { text: d.source, font: `24px ${IC_FONT}` });
+  const srcInBody = !!d.source && !kh4Footer(ctx, L + pad, R - pad, footY, (d.book ? d.book + ' · ' : '') + (d.env ? 'ENVIRONMENT' : d.ship ? 'SHIP ADVERSARY' : 'ADVERSARY'), d.source && { text: d.source, font: `24px ${IC_FONT}` });
 
   // ----- body blocks, shrunk until they fit -----
   const bodyTop = top + barH + (land ? 26 : 24);
