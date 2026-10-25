@@ -5273,7 +5273,7 @@ window.KH_HILTS = {
   <header class="ch-head"><p class="ch-num">Tool</p><h1>Downloads</h1><p class="aur aur-head" aria-hidden="true">downloads</p></header>
   <p class="lede">Everything to print for the table: blank character, droid, and starship sheets, the quick reference, credit chips, and a GM sheet. Each one is drawn in black and white, ready for a home printer.</p>
   <div id="dlApp"></div>
-  <div id="dlHold" hidden><div class="sheetmaker" data-sheet="ship"></div><div class="sheetmaker" data-sheet="base"></div></div>
+  <div id="dlHold" hidden><div class="sheetmaker" data-sheet="base"></div></div>
   <nav class="pager"></nav>
 </article>
 <article class="chapter tool" id="galaxy-map" data-i="93" hidden>
@@ -9652,14 +9652,6 @@ const DROID_LOGO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAlgAAAKjCAYAAA
 const SG_DROID = '"Droidobesh Depot", ' + IC_FONT;
 const SG_AUR = '"Aurebesh Canon", ' + IC_FONT;
 
-function sgWeapon(name){
-  if (!name || /^none$/i.test(name)) return null;
-  const inner = (name.match(/\(([^)]+)\)/) || [])[1];
-  const keys = [name, inner, name.replace(/s$/, ''), name.replace(/\s*\(.*\)/, '')].filter(Boolean).map(k => k.toLowerCase());
-  for (const k of keys) if (SHEETDATA.weapons[k]) return { ...SHEETDATA.weapons[k], name: name.replace(/\s*\(.*\)/, '') };
-  return { name, trait: '', range: '', damage: '', feature: '' };
-}
-
 /* ---------- drawing helpers (all sizes are multiplied by k) ---------- */
 function sgKit(ctx, k){
   const f = (w, s, fam = IC_FONT) => `${w} ${Math.round(s * k)}px ${fam}`;
@@ -9796,124 +9788,136 @@ async function khDroidCard(o = {}){
   return [front, back];
 }
 
-/* ---------- starship sheet ---------- */
-function sgShip(orient, shipName, k = 1){
-  const W = orient === 'landscape' ? 1800 : 1200, H = orient === 'landscape' ? 1200 : 1800, P = Math.round(kh4Pad(orient === 'landscape'));
-  const c = document.createElement('canvas'); c.width = W; c.height = H;
-  const ctx = c.getContext('2d'); const K = sgKit(ctx, k);
-  const sh = SHEETDATA.ships.find(x => x.name === shipName) || null;
-  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); kh4Frame(ctx, W, H); ctx.fillStyle = '#000'; ctx.strokeStyle = '#000';
+/* ---------- the starship sheet (design 1, print/starship-sheet/): front and back, 4 × 6 in at 300 dpi ----------
+   Draws the blank sheet exported by print/starship-sheet/build.py --site (starship/*.png) and writes a ship into the
+   field spots from starship/fields.json. o = { pf, s } where pf = printer-friendly and s (optional) = a ship from
+   SHEETDATA.ships. Returns [front, back]. Rules for ships that don't fit the boxes (decided Oct 25): weapon damage
+   adds +3 per tier above 1 (Core's ship-weapon rule); a hyperdrive that isn't a number prints "—" (none, a docking
+   ring, carried) or its class ("or 2", "2 + …" print 2); Limited (n) shows as ammo squares, not text; long weapon
+   features print a keyword and their full text on the back; stations with no row of their own take the nearest row
+   with a grey note on its crew line; features too long for the 5 Features lines go smaller (to 29 px), then run on
+   over the Cargo & notes lines. */
+const KHS = { fields: null, imgs: {} };
+const KHS_KEYWORDS = [[/^Can fire at a ship that has your ship Vulnerable/i, 'Rear arc'], [/^Gunner only; fires at ships behind/i, 'Rear arc'],
+  [/Slow Tracking/i, 'Slow Tracking'], [/Screen:/i, 'Screen'], [/^On a success, the target is Restrained/i, 'Restrains'], [/directly below the bomber/i, 'Bomb']];
+async function khShipSheet(o = {}){
+  const load = src => KHS.imgs[src] || (KHS.imgs[src] = new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = src; }));
+  if (!KHS.fields) KHS.fields = await (await fetch('starship/fields.json')).json();
+  const pf = o.pf ? '-print' : '';
+  const [fi, bi] = await Promise.all([load(`starship/front${pf}.png`), load(`starship/back${pf}.png`)]);
+  try { await Promise.all([`600 36px ${IC_FONT}`, `500 27px ${IC_FONT}`, `700 27px ${IC_FONT}`, `400 35px ${IC_BODY}`, `italic 700 35px ${IC_BODY}`, `italic 400 26px ${IC_BODY}`, '700 50px "Serif Gothic"'].map(f => document.fonts.load(f))); } catch (e) {}
+  const page = im => { const c = document.createElement('canvas'); c.width = 1800; c.height = 1200; const x = c.getContext('2d'); x.drawImage(im, 0, 0, 1800, 1200); return [c, x]; };
+  const [front, fx] = page(fi), [back, bx] = page(bi);
+  const s = o.s;
+  if (!s) return [front, back];
+  const K = 300 / 96, INK = '#141414', BAND = '#ededed';
+  const map = list => { const m = {}; list.forEach(f => m[f.name] = { x: f.x * K, y: f.y * K, w: f.w * K, h: f.h * K }); return m; };
+  const FF = map(KHS.fields.front), FB = map(KHS.fields.back);
+  // text on a write-in spot: shrinks to fit its width; boxes are centred both ways; align 'right' for a note at the line's end
+  const put = (x, F, name, text, font = `600 36px ${IC_FONT}`, align, color = INK) => {
+    const f = F[name]; if (!f || text == null || text === '') return;
+    text = String(text);
+    let size = parseFloat(font.match(/(\d+(?:\.\d+)?)px/)[1]);
+    const fnt = () => font.replace(/\d+(?:\.\d+)?px/, `${size}px`);
+    x.font = fnt(); while (x.measureText(text).width > f.w - 8 && size > 16) { size -= 1; x.font = fnt(); }
+    const tw = x.measureText(text).width;
+    x.fillStyle = color;
+    if (align === 'center') x.fillText(text, f.x + (f.w - tw) / 2, f.y + f.h / 2 + size * .36);
+    else x.fillText(text, align === 'right' ? f.x + f.w - tw - 4 : f.x + 4, f.y + f.h - 9);
+  };
+  const tick = (x, F, name) => { const f = F[name]; if (!f) return; x.save(); x.strokeStyle = INK; x.lineWidth = 5; x.lineCap = 'round'; x.lineJoin = 'round';
+    x.beginPath(); x.moveTo(f.x + f.w * .18, f.y + f.h * .55); x.lineTo(f.x + f.w * .42, f.y + f.h * .8); x.lineTo(f.x + f.w * .85, f.y + f.h * .2); x.stroke(); x.restore(); };
+  const dmgAt = (d, t) => { const m = /^(\d*d\d+)(?:\+(\d+))?(.*)$/.exec(d || ''); return !m || !(t > 1) ? d : `${m[1]}+${(+m[2] || 0) + 3 * (t - 1)}${m[3]}`; };
 
-  let y = P;
-  ctx.font = K.f(800, 64); ctx.fillText('STARSHIP', P, y + 52 * k);
-  y += 82 * k; K.line(P, y, W - P, 5); y += 52 * k;
-  const iw = W - P * 2;
-  if (orient === 'landscape') {
-    K.field('Name', P, y, P + iw * .34);
-    K.field('Model', P + iw * .37, y, P + iw * .74, sh ? sh.name : '');
-    K.field('Tier', P + iw * .77, y, W - P, sh ? String(sh.tier) : '');
-  } else {
-    K.field('Name', P, y, W - P); y += 58 * k;
-    K.field('Model', P, y, P + iw * .72, sh ? sh.name : '');
-    K.field('Tier', P + iw * .76, y, W - P, sh ? String(sh.tier) : '');
+  // ---------- front ----------
+  put(fx, FF, 'Model', s.name);
+  put(fx, FF, 'Tier', s.tier, '700 92px "Serif Gothic"', 'center');
+  put(fx, FF, 'Evasion', s.evasion, '700 50px "Serif Gothic"', 'center');
+  const [maj, sev] = String(s.thr).split('/').map(t => t.trim());
+  put(fx, FF, 'Major', maj, '700 50px "Serif Gothic"', 'center'); put(fx, FF, 'Severe', sev, '700 50px "Serif Gothic"', 'center');
+  const hy = String(s.hyper || '');
+  const hv = /none|ring|carri/i.test(hy) ? '—' : /\bor\b/.test(hy) ? (hy.match(/\d+(?:\.\d+)?/g) || ['—']).pop() : (hy.match(/\d+(?:\.\d+)?/) || ['—'])[0];
+  if (FF.Hyperdrive) { const f = FF.Hyperdrive; put(fx, { h: { ...f, w: f.w - 60 } }, 'h', hv, '700 50px "Serif Gothic"', 'center'); }   // left of the printed CLASS
+  tick(fx, FF, s.scale); tick(fx, FF, s.speed);
+  // Hull, Stress, Shields: the ship's own slots solid, the rest dashed (room for upgrades and refits)
+  const slots = (base, total, n, square) => {
+    for (let i = 0; i < total; i++) {
+      const f = FF[i ? `${base} ${i + 1}` : base]; if (!f) continue;
+      const cx = f.x + f.w / 2, cy = f.y + f.h / 2, r = f.w / 2;
+      fx.fillStyle = BAND; square ? fx.fillRect(f.x - 3, f.y - 3, f.w + 6, f.h + 6) : (fx.beginPath(), fx.arc(cx, cy, r + 3, 0, Math.PI * 2), fx.fill());
+      fx.fillStyle = '#fff'; fx.strokeStyle = INK; fx.lineWidth = 3.5; fx.setLineDash(i < n ? [] : [9, 6]);
+      fx.beginPath(); square ? fx.rect(f.x + 1.75, f.y + 1.75, f.w - 3.5, f.h - 3.5) : fx.arc(cx, cy, r - 1.75, 0, Math.PI * 2); fx.fill(); fx.stroke();
+    }
+    fx.setLineDash([]);
+  };
+  slots('Hull', 12, +s.hull, false); slots('Stress', 8, +s.stress, false); slots('Shields', 5, +s.shields, true);
+  // weapons: name, trait, range, damage at the ship's tier, a short feature; ammo squares only for Limited weapons
+  const longs = [];
+  (s.weapons || []).filter(w => !/^none$/i.test(w)).slice(0, 5).forEach((wn, i) => {
+    const raw = String(wn).toLowerCase().trim(), inner = (raw.match(/\(([^)]+)\)/) || [])[1];
+    const keys = [raw, inner, raw.replace(/s$/, ''), raw.replace(/\s*\(.*\)/, '')].filter(Boolean);
+    const w = keys.map(k => SHEETDATA.weapons[k]).find(Boolean) || { trait: '', range: '', damage: '', feature: '' };
+    const name = String(wn).replace(/\s*\(.*\)/, ''), r = `Weapon ${i + 1}`;
+    const lim = +((w.feature || '').match(/Limited \((\d)\)/) || [])[1] || 0;
+    let feat = (w.feature || '').replace(/Limited \(\d\);?\s*/, '').replace(/^—$/, '').replace(/^[;\s]+|[;\s.]+$/g, '');
+    if (feat.length > 13) { const kw = KHS_KEYWORDS.find(([re]) => re.test(feat)); longs.push([`${kw ? kw[1] : name} (${name}).`, ' ' + feat.replace(/^Capital ships only\.\s*/, '').replace(/^(Slow Tracking|Screen):\s*/, '') + (/[.!]$/.test(feat) ? '' : '.')]); feat = kw ? kw[1] : ''; }
+    const cell = `500 27px ${IC_FONT}`, bold = `700 27px ${IC_FONT}`;
+    put(fx, FF, `${r} name`, name, bold); put(fx, FF, `${r} trait`, w.trait, cell); put(fx, FF, `${r} range`, w.range, cell);
+    put(fx, FF, `${r} damage`, dmgAt(w.damage, +s.tier), bold); put(fx, FF, `${r} feature`, feat, cell);
+    [`${r} ammo`, `${r} ammo 2`].forEach((a, j) => { const f = FF[a]; if (f && j >= lim) { fx.fillStyle = '#fff'; fx.fillRect(f.x - 4, f.y - 4, f.w + 8, f.h + 8); } });
+  });
+  [5, 4, 3, 2, 1].filter(i => i > (s.weapons || []).filter(w => !/^none$/i.test(w)).length).forEach(i => [`Weapon ${i} ammo`, `Weapon ${i} ammo 2`].forEach(a => { const f = FF[a]; if (f) { fx.fillStyle = '#fff'; fx.fillRect(f.x - 4, f.y - 4, f.w + 8, f.h + 8); } }));
+  // stations: tick the ones aboard; Tail and Door Gunners, a Bombardier and a Copilot take the nearest row, noted on its crew line
+  const on = {}, note = {}; let g = 0;
+  const gun = n => { g++; const row = `Gunner ${Math.min(g, 2)}`; on[row] = 1; if (n) note[row] = g > 2 ? `and ${n}` : n; };
+  String(s.stations || '').split(/[,;]/).map(t => t.trim().toLowerCase()).filter(Boolean).forEach(r => {
+    if (/^pilot/.test(r)) on.Pilot = 1;
+    else if (/^two gunners/.test(r)) { gun(); gun(); }
+    else if (/^(tail|door) gunner/.test(r)) gun(r.split(' ')[0] + ' gunner');
+    else if (/^gunner/.test(r)) gun();
+    else if (/^bombardier/.test(r)) gun('bombardier');
+    else if (/^copilot/.test(r)) ((r.match(/\(([^)]+)\)/) || [])[1] || '').split(/\s+or\s+/).forEach(c => { c = c.trim(); if (c === 'gunner') gun('copilot'); else if (c) { const k = c[0].toUpperCase() + c.slice(1); on[k] = 1; note[k] = 'copilot'; } });
+    else if (/engineer/.test(r)) on.Engineer = 1;
+    else if (/^navigator/.test(r)) on.Navigator = 1;
+    else if (/^comms/.test(r)) on.Comms = 1;
+  });
+  Object.keys(on).forEach(k => tick(fx, FF, k));
+  Object.entries(note).forEach(([k, t]) => put(fx, FF, `${k} crew`, t, `italic 400 26px ${IC_BODY}`, 'right', '#8f8f8f'));
+
+  // ---------- back: features (with the full text of long weapon features), upgrade slots, tier ----------
+  put(bx, FB, 'Tier back', s.tier, '700 92px "Serif Gothic"', 'center');
+  put(bx, FB, 'Upgrade slots', +s.tier + 1, '700 30px "Serif Gothic"', 'center');
+  // the catalog's features run together ("Name: text. Name2: text."): names before a colon are bold, and so is a bare
+  // "Name." in Title Case (Escape Pods., Force-Responsive.; a single plain word such as "Unarmed." stays plain)
+  const titled = t => /^[A-Z][\w’']*-[A-Z][\w’'-]*$/.test(t) || /^[A-Z][\w’'-]*(?:\s+(?:of|the|and|[A-Z][\w’'-]*))+$/.test(t);
+  const runs = [], it = `italic 700 35px ${IC_BODY}`, rm = `400 35px ${IC_BODY}`;
+  String(s.features || '').split(/(?<=[.!])\s+/).forEach(sent => {
+    const m = /^([A-Z][^.:!]{1,40}):\s*(.*)$/.exec(sent), bare = /^([^.:!]{2,40})\.$/.exec(sent);
+    if (m) runs.push([m[1] + '.', it], [' ' + m[2] + ' ', rm]);
+    else if (bare && titled(bare[1])) runs.push([sent + ' ', it]);
+    else runs.push([sent + ' ', rm]);
+  });
+  longs.forEach(([a, b]) => runs.push([a, it], [b + ' ', rm]));
+  const lines = n => Array.from({ length: n }, (_, i) => i < 5 ? FB[i ? `Features ${i + 1}` : 'Features'] : FB[i > 5 ? `Cargo and notes ${i - 4}` : 'Cargo and notes']).filter(Boolean);
+  const lay = (L, size, force) => {
+    const words = []; runs.forEach(([t, font]) => t.split(/(\s+)/).forEach(w => w && words.push([w, font.replace(/\d+px/, `${size}px`)])));
+    const out = [[]]; let w = 0;
+    for (const [t, font] of words) {
+      bx.font = font; const tw = bx.measureText(t).width, f = L[out.length - 1];
+      if (/^\s+$/.test(t)) { if (out[out.length - 1].length) { out[out.length - 1].push([t, font]); w += tw; } continue; }
+      if (w + tw > f.w - 8 && out[out.length - 1].length) { if (out.length === L.length) { if (force) break; return null; } out.push([]); w = 0; }
+      out[out.length - 1].push([t, font]); w += tw;
+    }
+    return out;
+  };
+  if (runs.length) {
+    let L = lines(5), size = 35, out = lay(L, size);
+    while (!out && size > 29) out = lay(L, --size);
+    if (!out) { L = lines(8); out = lay(L, 29, true); }   // still too long: on over the Cargo & notes lines
+    bx.fillStyle = INK;
+    out.forEach((line, li) => { const f = L[li]; let cx = f.x + 4; line.forEach(([t, font]) => { bx.font = font; bx.fillText(t, cx, f.y + f.h - 14); cx += bx.measureText(t).width; }); });
   }
-  y += 50 * k;
-  // scale checkboxes
-  K.label('Scale', P, y);
-  let sx = P + 100 * k;
-  ['Fighter', 'Freighter', 'Capital'].forEach(s => { K.check(sx, y + 2 * k, sh && sh.scale === s, 24); ctx.font = K.f(600, 24); ctx.fillText(s, sx + 34 * k, y); sx += 44 * k + ctx.measureText(s).width + 26 * k; });
-  y += 22 * k;
-
-  const blocks = [
-    (x, y0, w) => { // stat boxes
-      const bw = Math.min(170 * k, (w - 3 * 14 * k) / 4);
-      const vals = sh ? [sh.evasion, sh.thr.split('/')[0].trim(), (sh.thr.split('/')[1] || '').trim(), ((sh.hyper.match(/[\d.]+/g) || ['']).slice(-1)[0])] : ['', '', '', ''];
-      ['Evasion', 'Major', 'Severe', 'Hyperdrive'].forEach((lab, i) => {
-        const bx = x + i * (bw + 14 * k);
-        K.box(bx, y0, bw, 100 * k); K.label(lab, bx + 14 * k, y0 + 30 * k, 19);
-        if (vals[i]) { ctx.font = K.f(700, 48); ctx.fillText(vals[i], bx + 14 * k, y0 + 84 * k); }
-        else if (i === 3) { ctx.font = K.f(600, 22); ctx.fillText('Class', bx + 14 * k, y0 + 84 * k); }
-      });
-      // speed
-      let yy = y0 + 136 * k; K.label('Speed', x, yy);
-      let cx = x + 100 * k;
-      ['Slow', 'Standard', 'Fast', 'Blazing'].forEach(s => { K.check(cx, yy + 2 * k, sh && sh.speed === s, 24); ctx.font = K.f(600, 24); ctx.fillText(s, cx + 34 * k, yy); cx += 44 * k + ctx.measureText(s).width + 24 * k; });
-      return 152 * k;
-    },
-    (x, y0, w) => { // tracks
-      const lw = 140 * k; let yy = y0;
-      const row = (lab, n, dashed, sq) => {
-        K.label(lab, x, yy + 32 * k, 24);
-        const h = sq ? K.squares(n + dashed, x + lw, yy + 6 * k, x + w, 34) : K.circles(n, x + lw, yy + 2 * k, x + w, dashed);
-        yy += Math.max(48 * k, h + 14 * k);
-      };
-      row('Hull', sh ? sh.hull : 10, sh ? 2 : 0);
-      row('Stress', sh ? sh.stress : 6, sh ? 2 : 0);
-      row('Shields', sh ? sh.shields : 4, sh ? 1 : 0, true);
-      ctx.font = K.f(500, 17); ctx.fillText(sh ? 'Dashed circles and the last box: room for upgrades. Mark a Shield to drop damage one threshold.' : 'Mark a Shield to drop incoming damage by one threshold.', x, yy + 22 * k);
-      return yy - y0 + 30 * k;
-    },
-    (x, y0, w) => { // weapons table
-      K.label('Weapons', x, y0 + 22 * k);
-      const cols = [['Weapon', .34], ['Trait', .15], ['Range', .15], ['Damage', .16], ['Notes', .20]];
-      let cx = x, yy = y0 + 58 * k;
-      cols.forEach(([n, f]) => { ctx.font = K.f(700, 17); ctx.fillText(n.toUpperCase(), cx, yy); cx += w * f; });
-      const ws = sh ? sh.weapons.map(sgWeapon).filter(Boolean) : [];
-      for (let i = 0; i < Math.max(4, ws.length); i++) {
-        yy += 44 * k; K.line(x, yy + 8 * k, x + w, 1.4);
-        const wpn = ws[i]; if (!wpn) continue;
-        cx = x; const vals = [wpn.name, wpn.trait, wpn.range, wpn.damage, wpn.feature === '—' ? '' : wpn.feature];
-        vals.forEach((v, j) => {
-          ctx.font = K.f(j === 0 ? 700 : 500, j === 4 ? 17 : 22, IC_FONT);
-          let t = v || ''; const max = w * cols[j][1] - 10 * k;
-          while (t && ctx.measureText(t).width > max) t = t.slice(0, -2) + '…';
-          ctx.fillText(t, cx, yy);
-          // ammo boxes for Limited weapons
-          cx += w * cols[j][1];
-        });
-        const lim = (wpn.feature || '').match(/Limited \((\d)\)/);
-        if (lim) { const S = 18 * k; for (let a = 0; a < +lim[1]; a++) { ctx.lineWidth = 2.4 * k; ctx.strokeRect(x + w - (a + 1) * (S + 6 * k), yy - S + 2 * k, S, S); } }
-      }
-      return yy - y0 + 18 * k;
-    },
-    (x, y0, w) => { // stations
-      K.label('Stations & crew', x, y0 + 22 * k);
-      const st = sh ? sh.stations : '';
-      let yy = y0 + 22 * k;
-      ['Pilot', 'Gunner', 'Navigator', 'Engineer', 'Comms'].forEach(n => {
-        yy += 44 * k;
-        K.check(x, yy, sh && new RegExp(n, 'i').test(st), 24);
-        ctx.font = K.f(600, 23); ctx.fillText(n, x + 36 * k, yy);
-        K.line(x + 190 * k, yy + 6 * k, x + w, 1.4);
-      });
-      return yy - y0 + 14 * k;
-    },
-    (x, y0, w) => { // critical systems
-      K.label('Critical systems (mark when down)', x, y0 + 22 * k);
-      const sys = ['Engines', 'Weapons', 'Shields', 'Sensors', 'Life Support', 'Hyperdrive'];
-      let yy = y0 + 66 * k, cx = x;
-      sys.forEach(n => {
-        ctx.font = K.f(600, 22); const tw = 34 * k + ctx.measureText(n).width + 26 * k;
-        if (cx + tw > x + w) { cx = x; yy += 42 * k; }
-        K.check(cx, yy, false, 22); ctx.fillText(n, cx + 32 * k, yy); cx += tw;
-      });
-      return yy - y0 + 16 * k;
-    },
-    (x, y0, w) => { // features & upgrades
-      K.label('Features & upgrades', x, y0 + 22 * k);
-      let h = 36 * k;
-      if (sh && sh.features) { h += K.wrap(sh.features, x, y0 + 60 * k, w, 22, 1.25); }
-      const slots = sh ? sh.tier + 1 : 5;
-      let yy = y0 + h + 10 * k;
-      for (let i = 0; i < slots; i++) { yy += 42 * k; K.check(x, yy - 4 * k, false, 22); K.line(x + 34 * k, yy, x + w, 1.4); }
-      return yy - y0 + 10 * k;
-    },
-  ];
-  const ok = sgFlow(ctx, blocks, orient, y + 26 * k, P, W, H - KH4.foot - 44, k, orient === 'landscape' ? [[0, 1, 2], [3, 4, 5]] : [[0, 1, 2, 3, 4, 5]]);
-  kh4Footer(ctx, P, W - P, H - KH4.foot, 'Starship', { text: (sh ? sh.name : 'KYBERHEART').toUpperCase(), font: `22px ${SG_AUR}`, ls: 3 });
-  // the logo again, large, across from the title
-  khLogo(ctx, W - P - 360 * k, P + 18 * k, 360 * k, 36 * k);
-  return ok ? c : (k > .62 ? sgShip(orient, shipName, k - .06) : c);
+  return [front, back];
 }
 
 /* ---------- home base sheet ---------- */
@@ -10030,31 +10034,74 @@ function sgFlow(ctx, blocks, orient, top, P, W, bottom, k, cols){
 (function(){
   if (!SHEETDATA) return;
   const makers = document.querySelectorAll('.sheetmaker');
-  makers.forEach(el => {
-    const kind = el.dataset.sheet;
-    const opts = kind === 'base'
-      ? '<option value="">Blank sheet</option>' + SG_BASE_SIZES.map(z => `<option>${esc(z[0])}</option>`).join('')
-      : '<option value="">Blank sheet</option>' + [1, 2, 3, 4].map(t => `<optgroup label="Tier ${t}">` + SHEETDATA.ships.filter(s => s.tier === t).map(s => `<option>${esc(s.name)}</option>`).join('') + '</optgroup>').join('');
+  // the starship sheet and the droid card (4 × 6, front and back) in the rules chapters: drawn from their blank cards
+  // like the Downloads page (khShipSheet, khDroidCard), with a pick, Printer-friendly, and for the droid a Picture box
+  const cardMaker = (el, ship) => {
+    const opts = ship ? [['', 'Blank'], ...[...SHEETDATA.ships].sort((a, b) => a.tier - b.tier).map(x => [x.name, `Tier ${x.tier} · ${x.name}`])]
+      : [['', 'Blank'], ...SHEETDATA.frames.map(f => [f.name, f.name])];
     el.innerHTML = `
       <div class="sm-bar">
-        <label>${kind === 'base' ? 'Size' : 'Ship'} <select class="sm-pick">${opts}</select></label>
+        <label>${ship ? 'Ship' : 'Frame'} <select class="sm-pick">${opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></label>
+        ${ship ? '' : '<label class="eb-check"><input type="checkbox" class="sm-pic"> Picture box</label>'}
+        <label class="eb-check"><input type="checkbox" class="sm-ink"> Printer-friendly</label>
+        <button type="button" class="btn primary sm-save" hidden>Download PNGs</button>
+      </div>
+      <div class="sm-stage dl-stage multi"></div>
+      <p class="sm-note">${ship ? 'The 4 × 6 starship sheet, front and back. Pick a ship to fill in its stats, weapons, stations, and features, or print it blank.'
+        : 'The 4 × 6 droid card, front and back. Pick a frame to fill in its Evasion, Stress, and Frame Feature, or print it blank.'} <a class="xref" href="#downloads">Downloads</a> has it as a PDF too.
+        <span class="sm-fallback" hidden> To save, right-click (or long-press) a side and choose “Save image.”</span></p>`;
+    const st = { pick: '', ink: false, pic: false, pages: [] }, what = ship ? 'starship-sheet' : 'droid-card';
+    const draw = async () => {
+      const v = st.pick;
+      let cs;
+      if (ship) cs = await khShipSheet({ pf: st.ink, s: SHEETDATA.ships.find(x => x.name === v) || null });
+      else { const fr = SHEETDATA.frames.find(f => f.name === v); cs = await khDroidCard({ pic: st.pic, pf: st.ink, d: fr ? { frame: fr.name, evasion: fr.evasion, stress: +fr.stress, dashed: 3, feature: [fr.feature, fr.featureText] } : null }); }
+      if (v !== st.pick) return;
+      st.pages.forEach(p => URL.revokeObjectURL(p.url));
+      st.pages = await Promise.all(cs.map(async c => { const blob = await new Promise(r => c.toBlob(r, 'image/png')); return { blob, url: URL.createObjectURL(blob) }; }));
+      const stage = el.querySelector('.sm-stage');
+      stage.innerHTML = st.pages.map((p, i) => `<figure><img src="${p.url}" alt="${ship ? 'Starship sheet' : 'Droid card'}${v ? ': ' + esc(v) : ''}, ${i ? 'back' : 'front'}"><figcaption>${i ? 'Back' : 'Front'}</figcaption></figure>`).join('');
+      stage.querySelectorAll('img').forEach(im => im.onclick = () => zoom(im));
+    };
+    el.querySelector('.sm-pick').onchange = e => { st.pick = e.target.value; draw(); };
+    el.querySelector('.sm-ink').onchange = e => { st.ink = e.target.checked; draw(); };
+    if (!ship) el.querySelector('.sm-pic').onchange = e => { st.pic = e.target.checked; draw(); };
+    el.querySelector('.sm-save').onclick = async () => {
+      const base = (st.pick || 'blank').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      try { for (let i = 0; i < st.pages.length; i++) await IC.dl.save({ filename: `${what}-${base}${st.ink ? '-printer-friendly' : ''}-${i ? 'back' : 'front'}.png`, data: st.pages[i].blob }); toast('Saved.'); }
+      catch (err) {
+        const code = err && err.code;
+        if (code === 'declined') return;
+        if (code === 'rate_limited') { toast('A save is already waiting for you. Finish that one first.'); return; }
+        el.querySelector('.sm-save').hidden = true; el.querySelector('.sm-fallback').hidden = false;
+      }
+    };
+    let drawn = false;
+    const io = new IntersectionObserver(es => { if (es.some(x => x.isIntersecting) && !drawn) { drawn = true; draw(); } });
+    io.observe(el);
+  };
+  makers.forEach(el => {
+    const kind = el.dataset.sheet;
+    if (kind === 'ship' || kind === 'droid') return cardMaker(el, kind === 'ship');
+    const opts = '<option value="">Blank sheet</option>' + SG_BASE_SIZES.map(z => `<option>${esc(z[0])}</option>`).join('');
+    el.innerHTML = `
+      <div class="sm-bar">
+        <label>Size <select class="sm-pick">${opts}</select></label>
         <div class="seg sm-orient" role="radiogroup" aria-label="Orientation"><button type="button" role="radio" data-v="landscape" aria-checked="true">Landscape</button><button type="button" role="radio" data-v="portrait" aria-checked="false">Portrait</button></div>
         <button type="button" class="btn primary sm-save" hidden>Download PNG</button>
       </div>
       <div class="sm-stage"><img alt="" class="landscape"></div>
-      <p class="sm-note">${kind === 'base'
-        ? 'A printable 4 × 6 home base sheet. Pick a size to set its facility slots, or print it blank.'
-        : 'A printable 4 × 6 starship sheet. Pick a ship to pre-fill its stats, trackers, weapons, stations, and features, or print it blank.'}
+      <p class="sm-note">A printable 4 × 6 home base sheet. Pick a size to set its facility slots, or print it blank.
         <span class="sm-fallback" hidden> To save, right-click (or long-press) the sheet and choose “Save image.”</span></p>`;
     const st = { orient: 'landscape', pick: '', url: null, blob: null };
     const draw = async () => {
       try { await Promise.all([khLogoReady(), document.fonts.load(`800 40px ${IC_FONT}`), document.fonts.load(`400 30px ${IC_BODY}`), document.fonts.load(`700 30px ${IC_BODY}`), document.fonts.load('30px "Droidobesh Depot"'), document.fonts.load('30px "Aurebesh Canon"'), document.fonts.load(`700 30px ${IC_FONT}`)]); } catch (e) {}
-      const canvas = kind === 'base' ? sgBase(st.orient, st.pick) : sgShip(st.orient, st.pick);
+      const canvas = sgBase(st.orient, st.pick);
       st.blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
       if (st.url) URL.revokeObjectURL(st.url);
       st.url = URL.createObjectURL(st.blob);
       const img = el.querySelector('img'); img.src = st.url; img.className = st.orient;
-      img.alt = `${kind === 'base' ? 'Home base' : 'Starship'} sheet${st.pick ? ': ' + st.pick : ''}`;
+      img.alt = `Home base sheet${st.pick ? ': ' + st.pick : ''}`;
     };
     el.querySelector('.sm-pick').onchange = e => { st.pick = e.target.value; draw(); };
     el.querySelectorAll('.sm-orient button').forEach(b => b.onclick = () => {
@@ -10062,7 +10109,7 @@ function sgFlow(ctx, blocks, orient, top, P, W, bottom, k, cols){
     });
     el.querySelector('.sm-save').onclick = async () => {
       const base = (st.pick || 'blank').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      try { await IC.dl.save({ filename: `${kind === 'base' ? 'home-base' : 'starship'}-sheet-${base}-${st.orient}.png`, data: st.blob }); toast('Sheet saved.'); }
+      try { await IC.dl.save({ filename: `home-base-sheet-${base}-${st.orient}.png`, data: st.blob }); toast('Sheet saved.'); }
       catch (err) {
         const code = err && err.code;
         if (code === 'declined') return;
@@ -13321,8 +13368,12 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
       ink: true, picbox: true,
       file: (v, st) => `kyberheart-droid-card${v ? '-' + slug(v) : ''}${st && st.picbox ? '-picture' : ''}${st && st.ink ? '-printer-friendly' : ''}`,
       render: async (v, st) => { const fr = SHEETDATA.frames.find(f => f.name === v); return khDroidCard({ pic: !!(st && st.picbox), pf: !!(st && st.ink), d: fr ? { frame: fr.name, evasion: fr.evasion, stress: +fr.stress, dashed: 3, feature: [fr.feature, fr.featureText] } : null }); } },
-    { id: 'starship', title: 'Starship Sheet', icon: 'R', meta: '4 × 6 index card · black and white', sheet: 'ship',
-      desc: 'Your crew’s ship on one card. Print it blank, or pick a ship to fill in its stats, trackers, weapons, stations, and features. The rules are in <a class="xref" href="#starships-and-space-combat">Starships and Space Combat</a>.' },
+    { id: 'starship', title: 'Starship Sheet', icon: 'R', meta: '4 × 6 card · 2 sides · black and white',
+      desc: 'Your crew’s ship: the ship in combat on the front, the ship’s log on the back (features, upgrades, its story, and cargo). Print it blank, or pick a ship to fill in its stats, weapons, stations, and features. To type into it instead, download a fillable PDF: <a class="xref" href="starship/kyberheart-starship-sheet.pdf" download>regular</a> or <a class="xref" href="starship/kyberheart-starship-sheet-printer-friendly.pdf" download>printer-friendly</a>. The rules are in <a class="xref" href="#starships-and-space-combat">Starships and Space Combat</a>.',
+      pick: { label: 'Ship', options: [['', 'Blank'], ...[...SHEETDATA.ships].sort((a, b) => a.tier - b.tier).map(s => [s.name, `Tier ${s.tier} · ${s.name}`])] },
+      ink: true,
+      file: (v, st) => `kyberheart-starship-sheet${v ? '-' + slug(v) : ''}${st && st.ink ? '-printer-friendly' : ''}`,
+      render: async (v, st) => khShipSheet({ pf: !!(st && st.ink), s: SHEETDATA.ships.find(s => s.name === v) || null }) },
     { id: 'home-base', title: 'Home Base Sheet', icon: 'H', meta: '4 × 6 index card · black and white', sheet: 'base',
       desc: 'Your crew’s base on one card: facilities and staff, quarters, Exposure, Garrison, and stores. Print it blank, or pick a size to set its facility slots. The rules are in <a class="xref" href="#home-base">Home Base</a>.' },
     { id: 'quick-reference', icon: '1', title: 'Quick Reference', meta: 'Letter · black and white',
@@ -13362,7 +13413,7 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
       </ul>
     </section>`;
 
-  // the droid and starship makers are built at page load from static holders; move them in
+  // the home base maker is built at page load from static holders; move them in
   root.querySelectorAll('.dl-sm').forEach(slot => { const sm = document.querySelector(`#dlHold .sheetmaker[data-sheet="${slot.dataset.sm}"]`); if (sm) slot.replaceWith(sm); });
   // the jump links scroll within the page (these sections are built after the router maps ids)
   root.querySelector('.dl-jump').addEventListener('click', e => { const a = e.target.closest('a'); if (!a) return; e.preventDefault(); const t = document.getElementById(a.getAttribute('href').slice(1)); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
