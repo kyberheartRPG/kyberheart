@@ -13493,7 +13493,7 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
       ink: true,
       file: (v, st) => `kyberheart-vehicle-sheet${v ? '-' + slug(v) : ''}${st && st.ink ? '-printer-friendly' : ''}`,
       render: async (v, st) => khVehicleSheet({ pf: !!(st && st.ink), v: SHEETDATA.vehicles.find(x => x.name === v) || null }) },
-    { id: 'home-base', title: 'Home Base Sheet', icon: 'H', meta: '4 × 6 index card · black and white', sheet: 'base',
+    { id: 'home-base', title: 'Home Base Sheet', icon: '6', meta: '4 × 6 index card · black and white', sheet: 'base',
       desc: 'Your crew’s base on one card: facilities and staff, quarters, Exposure, Garrison, and stores. Print it blank, or pick a size to set its facility slots. The rules are in <a class="xref" href="#home-base">Home Base</a>.' },
     { id: 'quick-reference', icon: '1', title: 'Quick Reference', meta: 'Letter · black and white',
       desc: 'The rules you reach for most at the table: the Duality Dice, Hope, damage, death moves, range, conditions, rests, Fear, and space combat. It’s drawn straight from the <a class="xref" href="#quick-reference">Quick Reference</a>, so it always matches the site.',
