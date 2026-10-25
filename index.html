@@ -9920,6 +9920,119 @@ async function khShipSheet(o = {}){
   return [front, back];
 }
 
+/* ---------- the vehicle sheet (print/vehicle-sheet/): front and back, 4 × 6 in at 300 dpi ----------
+   Draws the blank sheet exported by print/vehicle-sheet/build.py --site (vehicle/*.png) and writes a vehicle into the
+   field spots from vehicle/fields.json; the back (Core's ground rules) is the same for every vehicle. o = { pf, v } where
+   pf = printer-friendly and v (optional) = a vehicle from SHEETDATA.vehicles. Returns [front, back]. As the starship
+   sheet: weapon damage adds +3 per tier above 1, Limited (n) shows as ammo squares, text shrinks to fit. The features
+   leave off the GM note "Same tier, thresholds, and Hull as the … stat block" and a leading description sentence, then
+   go smaller (to 29 px) to fit the 4 Features lines (decided Oct 25). */
+const KHV = { fields: null, imgs: {} };
+async function khVehicleSheet(o = {}){
+  const load = src => KHV.imgs[src] || (KHV.imgs[src] = new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = src; }));
+  if (!KHV.fields) KHV.fields = await (await fetch('vehicle/fields.json')).json();
+  const pf = o.pf ? '-print' : '';
+  const [fi, bi] = await Promise.all([load(`vehicle/front${pf}.png`), load(`vehicle/back${pf}.png`)]);
+  try { await Promise.all([`600 36px ${IC_FONT}`, `500 27px ${IC_FONT}`, `700 27px ${IC_FONT}`, `400 35px ${IC_BODY}`, `italic 700 35px ${IC_BODY}`, `italic 400 26px ${IC_BODY}`, '700 50px "Serif Gothic"'].map(f => document.fonts.load(f))); } catch (e) {}
+  const page = im => { const c = document.createElement('canvas'); c.width = 1800; c.height = 1200; const x = c.getContext('2d'); x.drawImage(im, 0, 0, 1800, 1200); return [c, x]; };
+  const [front, x] = page(fi), [back] = page(bi);
+  const v = o.v;
+  if (!v) return [front, back];
+  const K = 300 / 96, INK = '#141414', BAND = '#ededed';
+  const F = {}; KHV.fields.front.forEach(f => F[f.name] = { x: f.x * K, y: f.y * K, w: f.w * K, h: f.h * K });
+  // text on a write-in spot: shrinks to fit its width; boxes are centred both ways ('center'), or centred down and set
+  // against the slash ('to-right', 'to-left': Major and Severe); align 'right' for a note at the line's end
+  const put = (name, text, font = `600 36px ${IC_FONT}`, align, color = INK) => {
+    const f = F[name]; if (!f || text == null || text === '') return;
+    text = String(text);
+    let size = parseFloat(font.match(/(\d+(?:\.\d+)?)px/)[1]);
+    const fnt = () => font.replace(/\d+(?:\.\d+)?px/, `${size}px`);
+    x.font = fnt(); while (x.measureText(text).width > f.w - 8 && size > 16) { size -= 1; x.font = fnt(); }
+    const tw = x.measureText(text).width;
+    x.fillStyle = color;
+    if (align === 'center') x.fillText(text, f.x + (f.w - tw) / 2, f.y + f.h / 2 + size * .36);
+    else if (align === 'to-right') x.fillText(text, f.x + f.w - tw - 18, f.y + f.h / 2 + size * .36);
+    else if (align === 'to-left') x.fillText(text, f.x + 18, f.y + f.h / 2 + size * .36);
+    else x.fillText(text, align === 'right' ? f.x + f.w - tw - 4 : f.x + 4, f.y + f.h - 9);
+  };
+  const tick = name => { const f = F[name]; if (!f) return; x.save(); x.strokeStyle = INK; x.lineWidth = 5; x.lineCap = 'round'; x.lineJoin = 'round';
+    x.beginPath(); x.moveTo(f.x + f.w * .18, f.y + f.h * .55); x.lineTo(f.x + f.w * .42, f.y + f.h * .8); x.lineTo(f.x + f.w * .85, f.y + f.h * .2); x.stroke(); x.restore(); };
+  const dmgAt = (d, t) => { const m = /^(\d*d\d+)(?:\+(\d+))?(.*)$/.exec(d || ''); return !m || !(t > 1) ? d : `${m[1]}+${(+m[2] || 0) + 3 * (t - 1)}${m[3]}`; };
+
+  put('Model', v.name);
+  put('Tier', v.tier, '700 92px "Serif Gothic"', 'center');
+  put('Evasion', v.evasion, '700 50px "Serif Gothic"', 'center');
+  const [maj, sev] = String(v.thr).split('/').map(t => t.trim());
+  put('Major', maj, '700 50px "Serif Gothic"', 'to-right'); put('Severe', sev, '700 50px "Serif Gothic"', 'to-left');
+  tick(v.speed); tick(v.open ? 'Open' : 'Enclosed');
+  put('Seats', v.seats);
+  // Hull, Stress, Armor: the vehicle's own slots solid, the rest dashed
+  const slots = (base, total, n, square) => {
+    for (let i = 0; i < total; i++) {
+      const f = F[i ? `${base} ${i + 1}` : base]; if (!f) continue;
+      const cx = f.x + f.w / 2, cy = f.y + f.h / 2, r = f.w / 2;
+      x.fillStyle = BAND; square ? x.fillRect(f.x - 3, f.y - 3, f.w + 6, f.h + 6) : (x.beginPath(), x.arc(cx, cy, r + 3, 0, Math.PI * 2), x.fill());
+      x.fillStyle = '#fff'; x.strokeStyle = INK; x.lineWidth = 3.5; x.setLineDash(i < n ? [] : [9, 6]);
+      x.beginPath(); square ? x.rect(f.x + 1.75, f.y + 1.75, f.w - 3.5, f.h - 3.5) : x.arc(cx, cy, r - 1.75, 0, Math.PI * 2); x.fill(); x.stroke();
+    }
+    x.setLineDash([]);
+  };
+  slots('Hull', 12, +v.hull, false); slots('Stress', 6, +v.stress, false); slots('Armor', 4, +v.armor, true);
+  // weapons (2 rows): name, trait, range, damage at the vehicle's tier, feature; ammo squares only for Limited weapons
+  const ws = (v.weapons || []).filter(w => !/^none/i.test(w)).slice(0, 2);
+  ws.forEach((wn, i) => {
+    const raw = String(wn).toLowerCase().trim(), base = raw.replace(/^twin\s+/, '');
+    const w = [raw, raw.replace(/s$/, ''), base, base.replace(/s$/, '')].map(k => SHEETDATA.weapons[k]).find(Boolean) || { trait: '', range: '', damage: '', feature: '' };
+    const r = `Weapon ${i + 1}`, lim = +((w.feature || '').match(/Limited \((\d)\)/) || [])[1] || 0;
+    const feat = (w.feature || '').replace(/Limited \(\d\);?\s*/, '').replace(/^—$/, '').replace(/^[;\s]+|[;\s.]+$/g, '');
+    const cell = `500 27px ${IC_FONT}`, bold = `700 27px ${IC_FONT}`;
+    put(`${r} name`, String(wn).replace(/\s*\(.*\)/, ''), bold); put(`${r} trait`, w.trait, cell); put(`${r} range`, w.range, cell);
+    put(`${r} damage`, dmgAt(w.damage, +v.tier), bold); put(`${r} feature`, feat, cell);
+    if (lim < 2) [`${r} ammo 2`, ...(lim ? [] : [`${r} ammo`])].forEach(a => { const f = F[a]; if (f) { x.fillStyle = '#fff'; x.fillRect(f.x - 4, f.y - 4, f.w + 8, f.h + 8); } });
+  });
+  for (let i = ws.length + 1; i <= 2; i++) [`Weapon ${i} ammo`, `Weapon ${i} ammo 2`].forEach(a => { const f = F[a]; if (f) { x.fillStyle = '#fff'; x.fillRect(f.x - 4, f.y - 4, f.w + 8, f.h + 8); } });
+  // stations: Driver ("also fires" noted on its line), Gunners, and anything else (Commander, Comms) on the fourth row
+  const extra = []; let g = 0;
+  String(v.stations || '').split(/[,;]/).map(t => t.trim()).filter(Boolean).forEach(r => {
+    const l = r.toLowerCase();
+    if (/^driver/.test(l)) { tick('Driver'); if (/also fires/.test(l)) put('Driver crew', 'also fires', `italic 400 26px ${IC_BODY}`, 'right', '#8f8f8f'); }
+    else if (/^two gunners/.test(l)) { tick('Gunner 1'); tick('Gunner 2'); g = 2; }
+    else if (/gunner/.test(l)) { if (g < 2) tick(`Gunner ${++g}`); }
+    else extra.push(r.replace(/\s*\(.*\)/, ''));
+  });
+  if (extra.length) { tick('Station 4'); put('Station 4 name', extra.join(', '), `600 27px ${IC_FONT}`); }
+  // features: the catalog's run-together text, bold names, without the GM note and a leading description sentence
+  const titled = t => /^[A-Z][\w’']*-[A-Z][\w’'-]*$/.test(t) || /^[A-Z][\w’'-]*(?:\s+(?:of|the|and|[A-Z][\w’'-]*))+$/.test(t);
+  const runs = [], it = `italic 700 35px ${IC_BODY}`, rm = `400 35px ${IC_BODY}`;
+  String(v.features || '').split(/(?<=[.!])\s+/).forEach((sent, i) => {
+    const m = /^([A-Z][^.:!]{1,40}):\s*(.*)$/.exec(sent), bare = /^([^.:!]{2,40})\.$/.exec(sent);
+    if (/^Same tier, thresholds/.test(sent)) return;
+    if (m) runs.push([m[1] + '.', it], [' ' + m[2] + ' ', rm]);
+    else if (bare && titled(bare[1])) runs.push([sent + ' ', it]);
+    else if (i > 0) runs.push([sent + ' ', rm]);   // a first sentence that names no feature is a description
+  });
+  const L = ['Features', 'Features 2', 'Features 3', 'Features 4'].map(n => F[n]).filter(Boolean);
+  const lay = (size, force) => {
+    const words = []; runs.forEach(([t, font]) => t.split(/(\s+)/).forEach(w => w && words.push([w, font.replace(/\d+px/, `${size}px`)])));
+    const out = [[]]; let w = 0;
+    for (const [t, font] of words) {
+      x.font = font; const tw = x.measureText(t).width, f = L[out.length - 1];
+      if (/^\s+$/.test(t)) { if (out[out.length - 1].length) { out[out.length - 1].push([t, font]); w += tw; } continue; }
+      if (w + tw > f.w - 8 && out[out.length - 1].length) { if (out.length === L.length) { if (force) break; return null; } out.push([]); w = 0; }
+      out[out.length - 1].push([t, font]); w += tw;
+    }
+    return out;
+  };
+  if (runs.length && L.length) {
+    let size = 35, out = lay(size);
+    while (!out && size > 29) out = lay(--size);
+    if (!out) out = lay(29, true);
+    x.fillStyle = INK;
+    out.forEach((line, li) => { const f = L[li]; let cx = f.x + 4; line.forEach(([t, font]) => { x.font = font; x.fillText(t, cx, f.y + f.h - 14); cx += x.measureText(t).width; }); });
+  }
+  return [front, back];
+}
+
 /* ---------- home base sheet ---------- */
 const SG_BASE_SIZES = [['Safe House', 2], ['Hideout', 3], ['Outpost', 4], ['Stronghold', 5], ['Freighter (shipboard)', 1], ['Capital ship', 4]];
 function sgBase(orient, size, k = 1){
@@ -13374,6 +13487,12 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
       ink: true,
       file: (v, st) => `kyberheart-starship-sheet${v ? '-' + slug(v) : ''}${st && st.ink ? '-printer-friendly' : ''}`,
       render: async (v, st) => khShipSheet({ pf: !!(st && st.ink), s: SHEETDATA.ships.find(s => s.name === v) || null }) },
+    { id: 'vehicle', title: 'Vehicle Sheet', icon: 'O', meta: '4 × 6 card · 2 sides · black and white',
+      desc: 'A speeder, walker, or gunship the crew drives: the vehicle on the front, the ground rules on the back (damage, breakdowns, crashing, driving, and repairs). Print it blank, or pick a vehicle to fill in its stats, weapons, stations, and features. To type into it instead, download a fillable PDF: <a class="xref" href="vehicle/kyberheart-vehicle-sheet.pdf" download>regular</a> or <a class="xref" href="vehicle/kyberheart-vehicle-sheet-printer-friendly.pdf" download>printer-friendly</a>. The rules are in <a class="xref" href="#ground-vehicles">Ground Vehicles</a>.',
+      pick: { label: 'Vehicle', options: [['', 'Blank'], ...[...SHEETDATA.vehicles].sort((a, b) => a.tier - b.tier).map(v => [v.name, `Tier ${v.tier} · ${v.name}`])] },
+      ink: true,
+      file: (v, st) => `kyberheart-vehicle-sheet${v ? '-' + slug(v) : ''}${st && st.ink ? '-printer-friendly' : ''}`,
+      render: async (v, st) => khVehicleSheet({ pf: !!(st && st.ink), v: SHEETDATA.vehicles.find(x => x.name === v) || null }) },
     { id: 'home-base', title: 'Home Base Sheet', icon: 'H', meta: '4 × 6 index card · black and white', sheet: 'base',
       desc: 'Your crew’s base on one card: facilities and staff, quarters, Exposure, Garrison, and stores. Print it blank, or pick a size to set its facility slots. The rules are in <a class="xref" href="#home-base">Home Base</a>.' },
     { id: 'quick-reference', icon: '1', title: 'Quick Reference', meta: 'Letter · black and white',
