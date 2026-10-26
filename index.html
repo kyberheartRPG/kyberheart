@@ -6120,10 +6120,14 @@ const Gear = { docs: {}, rows: null, target: null, old: null };
 const khArtIsOwn = d => !!(d && d.asset && !d.cardart);
 // Unlimited card art only ever fills adversary and ship adversary entries: never chapter/section banners,
 // classes, subclasses, communities, ancestries, environments, or equipment (wrong resolution and proportions)
-function khCardArtOk(id){ try { return !!document.querySelector('#adversaries [id="' + id + '"], #ship-adversaries [id="' + id + '"], .xbook[data-xsrc="adversaries"] [id="' + id + '"], .xbook[data-xsrc="ship-adversaries"] [id="' + id + '"]'); } catch (e) { return false; } }
+const KH_CARD_ART_IN = ['#adversaries', '#ship-adversaries', '.xbook[data-xsrc="adversaries"]', '.xbook[data-xsrc="ship-adversaries"]'];
+function khCardArtOk(id){ try { return !!document.querySelector(KH_CARD_ART_IN.map(c => c + ' [id="' + id + '"]').join(', ')); } catch (e) { return false; } }
+// every id inside the adversary chapters, gathered in one pass: one khCardArtOk per picture scanned the whole page each time (about 1.5 s at load)
+const khCardArtIds = () => new Set([...document.querySelectorAll(KH_CARD_ART_IN.map(c => c + ' [id]').join(', '))].map(e => e.id));
 function khNoCardDecor(art, gear){
   const a = {}, g = {};
-  Object.entries(art || {}).forEach(([k, d]) => { if (!(d && d.cardart) || khCardArtOk(k)) a[k] = d; });
+  let ids = null;
+  Object.entries(art || {}).forEach(([k, d]) => { if (!(d && d.cardart) || (ids || (ids = khCardArtIds())).has(k)) a[k] = d; });
   Object.entries(gear || {}).forEach(([k, d]) => { if (!(d && d.cardart)) g[k] = d; });
   return { art: a, gear: g };
 }
