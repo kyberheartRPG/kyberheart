@@ -2630,6 +2630,10 @@ figure.art.landscape img{aspect-ratio:16/9;object-fit:cover}
 @media (max-width:620px){figure.art.landscape,.statblock figure.art.landscape{float:none;width:100%;margin:6px 0 12px}}
 @media (max-width:620px){.statblock figure.art.portrait{float:right;width:40%;margin:4px 0 10px 12px}}
 .statblock p.adv-src{margin:10px 0 0;font:500 12.5px var(--ui);font-style:italic;color:var(--muted)}
+/* stat blocks and tables off screen skip layout until scrolled near (page switches to Adversaries or Equipment took 150-400 ms); sizes are the median heights */
+@media screen{.chapter section.statblock{content-visibility:auto;contain-intrinsic-size:auto 680px}
+.chapter .tw{content-visibility:auto;contain-intrinsic-size:auto 420px}
+.adv-compact :is(#advList,#shipList) > section.statblock:not(.open){content-visibility:visible}}   /* compact cards are small and cheap; printing lays out everything as before */
 .statblock > .card-body > p:has(> strong:first-child):not(:has(.ftype)):not(.sline):not(.sb-exp){margin-top:10px}
 /* ---------- Kyberheart cards ---------- */
 .kc{--k:1;position:relative;display:flex;flex-direction:column;width:100%;max-width:360px;aspect-ratio:5/7;container-type:inline-size;overflow:hidden;
@@ -13331,6 +13335,12 @@ const CM = { ch: null, saved: false, tab: 'build', dirty: false, t: null };
       ink: true,
       file: (v, st) => `kyberheart-home-base-sheet${v ? '-' + slug(v) : ''}${st && st.ink ? '-printer-friendly' : ''}`,
       render: async (v, st) => khBaseSheet({ pf: !!(st && st.ink), size: v }) },
+    { id: 'aurebesh', title: 'Aurebesh Card', icon: 'C', meta: '4 × 6 card · 1 side · black and white',
+      desc: 'The galaxy’s alphabet on one card for the table: all 26 letters with their names, the eight combined letters, the numerals, and punctuation. Keep it handy for reading signs, datapads, and other props in Aurebesh, or type your own in the <a class="xref" href="#aurebesh-translator">Aurebesh Translator</a>. To print it from a file instead, download the PDF: <a class="xref" href="aurebesh/kyberheart-aurebesh-card.pdf" download>regular</a> or <a class="xref" href="aurebesh/kyberheart-aurebesh-card-printer-friendly.pdf" download>printer-friendly</a>.',
+      ink: true,
+      file: (v, st) => `kyberheart-aurebesh-card${st && st.ink ? '-printer-friendly' : ''}`,
+      render: async (v, st) => { const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = `aurebesh/card${st && st.ink ? '-print' : ''}.png`; });
+        const c = document.createElement('canvas'); c.width = 1800; c.height = 1200; c.getContext('2d').drawImage(im, 0, 0, 1800, 1200); return [c]; } },
     { id: 'quick-reference', icon: '1', title: 'Quick Reference', meta: 'Letter · black and white',
       desc: 'The rules you reach for most at the table: the Duality Dice, Hope, damage, death moves, range, conditions, rests, Fear, and space combat. It’s drawn straight from the <a class="xref" href="#quick-reference">Quick Reference</a>, so it always matches the site.',
       file: () => 'kyberheart-quick-reference', render: async () => { await fontsReady(); return qrPages(); } },
@@ -14240,6 +14250,7 @@ const KHFonts = (() => {
     <h3 class="ab-h" id="abBreakH">Letter by letter</h3>
     <div class="ab-break" id="abBreak"></div>
     <h3 class="ab-h">Cheat sheet</h3>
+    <p class="cm-help ab-gal-help">Aurebesh for the table: the <a class="xref" href="#downloads">Aurebesh Card</a> in Downloads is the Aurebesh cheat sheet on a 4 × 6 card (PDF: <a class="xref" href="aurebesh/kyberheart-aurebesh-card.pdf" download>regular</a> or <a class="xref" href="aurebesh/kyberheart-aurebesh-card-printer-friendly.pdf" download>printer-friendly</a>).</p>
     <div class="ab-sheet" id="abSheet"></div>
     <details class="ab-credits"><summary>Font credits</summary><ul>${SCRIPTS.filter(s => s.credit).map(s => `<li><b>${esc(s.label)}</b> · ${esc(s.credit)}${/CC BY 3\.0/.test(s.credit) ? ' · <a href="https://creativecommons.org/licenses/by/3.0/us/legalcode" target="_blank" rel="noopener">license</a>' : ''}</li>`).join('')}</ul><p class="cm-help">Fan fonts used in this non-commercial fan project, with thanks to their makers.</p></details>`;
 
